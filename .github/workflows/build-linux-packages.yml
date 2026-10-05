@@ -266,19 +266,19 @@ jobs:
             exit 1
           fi
 
-          cleanup_draft() {
+          cleanup_release() {
             status=$?
             trap - EXIT
             if [[ "$status" -ne 0 ]]; then
-              draft="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-                "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.draft' 2>/dev/null || true)"
-              if [[ "$draft" == "true" ]]; then
+              immutable="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.immutable' 2>/dev/null || true)"
+              if [[ "$immutable" != "true" ]]; then
                 gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
               fi
             fi
             exit "$status"
           }
-          trap cleanup_draft EXIT
+          trap cleanup_release EXIT
 
           mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
           test "${#assets[@]}" -eq 4

@@ -14,6 +14,7 @@ LEAK_PATHS = (
     b"/work/src",
     b"/work/build",
     b"/work/stage",
+    b"/work/consumer",
     b"/github/workspace",
     b"/home/runner/work",
 )
@@ -63,6 +64,12 @@ def real_shared_objects(prefix: pathlib.Path):
     return result
 
 
+def require_x86_64_objdump(path: pathlib.Path):
+    formats = re.findall(r"file format ([^\s]+)", run("objdump", "-f", str(path)))
+    require(formats, f"objdump reported no object format for {path}")
+    require(all(fmt == "elf64-x86-64" for fmt in formats), f"wrong objdump architecture in {path}: {formats}")
+
+
 def toolkit_names(prefix: pathlib.Path, linkage: str):
     suffix = ".a" if linkage == "static" else ".so"
     names = set()
@@ -86,6 +93,7 @@ def normalize_build_path(value: str, prefix: pathlib.Path) -> str:
         (str(prefix), "<sdk-prefix>"),
         ("/work/stage", "<stage-dir>"),
         ("/work/build", "<build-dir>"),
+        ("/work/consumer", "<consumer-build>"),
         ("/work/src", "<source-dir>"),
     )
     for old, new in replacements:
@@ -178,6 +186,7 @@ def create_archive(args):
 def make_manifest(args):
     prefix = pathlib.Path(args.prefix).resolve()
     consumer = pathlib.Path(args.consumer).resolve()
+    consumer_link = pathlib.Path(args.consumer_link)
     shared = real_shared_objects(prefix) if args.linkage == "shared" else []
     cmake_options = {
         "requested": requested_cmake_options(pathlib.Path(args.configure_options), prefix),
@@ -211,6 +220,7 @@ def make_manifest(args):
         "symbol_versions": {
             "shared_objects": symbol_maxima(shared) if shared else None,
             "consumer": symbol_maxima([consumer]),
+            "qualified_consumer_link": normalize_build_path(consumer_link.read_text().strip(), prefix),
             "static_scope": (
                 "consumer values qualify only archive members pulled by the fixture"
                 if args.linkage == "static" else None
@@ -259,14 +269,20 @@ def validate_prefix(args):
         for path in shared:
             file_text = run("file", "-b", str(path))
             require("x86-64" in file_text or "x86_64" in file_text, f"wrong architecture: {path}: {file_text}")
+            require_x86_64_objdump(path)
             dynamic = run("readelf", "-d", str(path))
             for leak in ("/work/src", "/work/build", "/work/stage", "/github/workspace", "/home/runner/work"):
                 require(leak not in dynamic, f"RPATH/RUNPATH leak {leak} in {path}")
             require(not OPTIONAL_DEP_RE.search(dynamic), f"disabled optional runtime dependency in {path}\n{dynamic}")
+            for needed in re.findall(r"Shared library: \[([^]]+)\]", dynamic):
+                if needed.startswith("libTK"):
+                    require((prefix / "lib" / needed).exists(), f"missing packaged OCCT dependency {needed} needed by {path.name}")
         glibc = symbol_maxima(shared).get("GLIBC")
         require(glibc is None or version_key(glibc) <= version_key("2.17"), f"shared libraries require GLIBC_{glibc}")
     else:
         require(not any((prefix / "lib").glob("libTK*.so*")), "static SDK contains shared OCCT toolkits")
+        for toolkit in ("TKernel", "TKBO", "TKDESTEP"):
+            require_x86_64_objdump(prefix / "lib" / f"lib{toolkit}.a")
 
 
 def verify_symbols(args):
@@ -288,6 +304,7 @@ def main():
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--prefix", required=True)
     manifest.add_argument("--consumer", required=True)
+    manifest.add_argument("--consumer-link", required=True)
     manifest.add_argument("--cmake-cache", required=True)
     manifest.add_argument("--configure-options", required=True)
     manifest.add_argument("--linkage", choices=("shared", "static"), required=True)

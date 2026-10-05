@@ -36,5 +36,5 @@ if [[ "$linkage" == "static" ]]; then
 fi
 
 env -u CASROOT -u THIRDPARTY_DIR -u CSF_OCCTLibPath -u CSF_OCCTResourcePath \
-  bash -c 'set -eo pipefail; source "$1/bin/env.sh"; set -u; cd "$2"; exec "$3"' \
+  bash -c 'set -eo pipefail; source "$1/bin/env.sh" ""; set -u; cd "$2"; exec "$3"' \
   _ "$sdk_prefix" "$build_dir" "$consumer"

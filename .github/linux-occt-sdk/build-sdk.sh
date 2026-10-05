@@ -149,6 +149,7 @@ PY
 "$python_bin" "$script_dir/sdk_tools.py" manifest \
   --prefix "$prefix" \
   --consumer "$consumer_pre/occt_sdk_consumer" \
+  --consumer-link "$consumer_pre/CMakeFiles/occt_sdk_consumer.dir/link.txt" \
   --cmake-cache "$build_dir/CMakeCache.txt" \
   --configure-options "$build_dir/configure-options.txt" \
   --linkage "$linkage" \
