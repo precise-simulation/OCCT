@@ -38,7 +38,6 @@ jobs:
     name: Resolve source identity
     runs-on: ubuntu-24.04
     outputs:
-      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
       source_sha: ${{ steps.source.outputs.source_sha }}
       source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
       source_version: ${{ steps.source.outputs.source_version }}
@@ -47,47 +46,36 @@ jobs:
       - name: Checkout exact workflow revision
         uses: actions/checkout@v4
         with:
-          path: automation
           fetch-depth: 1
 
-      - name: Checkout exact OCCT source revision
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.OCCT_793_BASE_SHA }}
-          path: source
-          fetch-depth: 1
-
-      - name: Record workflow and source identity
+      - name: Record source identity
         id: source
         shell: bash
         run: |
           set -euo pipefail
-          workflow_sha="$(git -C automation rev-parse HEAD)"
-          source_sha="$(git -C source rev-parse HEAD)"
-          test "$source_sha" = "$OCCT_793_BASE_SHA"
-          source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
-          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
-          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
-          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          source_sha="$(git rev-parse HEAD)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
           source_version="${major}.${minor}.${patch}"
           test "$source_version" = "$OCCT_VERSION"
-          echo "workflow_sha=$workflow_sha" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
           echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
           echo "event_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          printf 'event SHA: %s\nworkflow SHA: %s\nsource SHA: %s\nversion: %s\nSOURCE_DATE_EPOCH: %s\n' \
-            "$GITHUB_SHA" "$workflow_sha" "$source_sha" "$source_version" "$source_date_epoch"
+          printf 'event SHA: %s\nsource SHA: %s\nversion: %s\nSOURCE_DATE_EPOCH: %s\n' \
+            "$GITHUB_SHA" "$source_sha" "$source_version" "$source_date_epoch"
 
   helper-validation:
     name: Validate Linux SDK helpers
     needs: metadata
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout workflow helpers
+      - name: Checkout resolved source
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          ref: ${{ needs.metadata.outputs.source_sha }}
 
       - name: Check helper syntax
         shell: bash
@@ -113,17 +101,10 @@ jobs:
           - shared
           - static
     steps:
-      - name: Checkout workflow helpers
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.metadata.outputs.workflow_sha }}
-          path: automation
-
-      - name: Checkout pinned OCCT source
+      - name: Checkout resolved source
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.metadata.outputs.source_sha }}
-          path: source
 
       - name: Pull pinned manylinux producer
         shell: bash
@@ -147,10 +128,9 @@ jobs:
             -e PRODUCER_IMAGE_TAG \
             -e PRODUCER_IMAGE_DIGEST \
             -v "$work_dir:/work" \
-            -v "$GITHUB_WORKSPACE/source:/work/src:ro" \
-            -v "$GITHUB_WORKSPACE/automation:/work/automation:ro" \
+            -v "$GITHUB_WORKSPACE:/work/src" \
             "$PRODUCER_IMAGE@$PRODUCER_IMAGE_DIGEST" \
-            bash /work/automation/.github/linux-occt-sdk/build-sdk.sh "${{ matrix.linkage }}"
+            bash /work/src/.github/linux-occt-sdk/build-sdk.sh "${{ matrix.linkage }}"
 
       - name: Upload qualified SDK
         uses: actions/upload-artifact@v4
@@ -187,10 +167,10 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates cmake g++ make binutils file python3
 
-      - name: Checkout workflow helpers
+      - name: Checkout resolved source
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          ref: ${{ needs.metadata.outputs.source_sha }}
 
       - name: Download qualified SDK
         uses: actions/download-artifact@v4
@@ -218,7 +198,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       POLICY_TOKEN: ${{ secrets.OCCT_RELEASE_POLICY_TOKEN }}
-      WORKFLOW_SHA: ${{ needs.metadata.outputs.workflow_sha }}
       SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
     steps:
       - name: Require release-policy credential
@@ -233,18 +212,17 @@ jobs:
       - name: Checkout complete source history
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          ref: ${{ needs.metadata.outputs.source_sha }}
           fetch-depth: 0
 
-      - name: Prove workflow lineage and pinned OCCT source
+      - name: Prove OCCT-793 lineage and version
         shell: bash
         run: |
           set -euo pipefail
           test "${{ needs.metadata.outputs.source_version }}" = "$OCCT_VERSION"
-          test "$SOURCE_SHA" = "$OCCT_793_BASE_SHA"
           git fetch origin +refs/heads/OCCT-793:refs/remotes/origin/OCCT-793
-          git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$WORKFLOW_SHA"
-          git merge-base --is-ancestor "$WORKFLOW_SHA" refs/remotes/origin/OCCT-793
+          git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/OCCT-793
 
       - name: Verify immutable releases are enabled
         shell: bash
@@ -260,7 +238,7 @@ jobs:
 
       - name: Re-resolve triggering tag
         shell: bash
-        run: bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+        run: bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
 
       - name: Download shared SDK
         uses: actions/download-artifact@v4
@@ -316,13 +294,13 @@ jobs:
 
           mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
           test "${#assets[@]}" -eq 4
-          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --draft \
             --title "OCCT $OCCT_VERSION Linux SDK" \
-            --notes "OCCT $OCCT_VERSION x86_64 Linux SDKs built from pinned OCCT source $SOURCE_SHA by workflow revision $WORKFLOW_SHA with the pinned manylinux2014/glibc 2.17 producer. Includes qualified shared and static archives and SHA-256 checksum files."
+            --notes "OCCT $OCCT_VERSION x86_64 Linux SDKs built from $SOURCE_SHA with the pinned manylinux2014/glibc 2.17 producer. Includes qualified shared and static archives and SHA-256 checksum files."
 
           release_json="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME")"
           while IFS= read -r file; do
@@ -332,7 +310,7 @@ jobs:
             test "$actual" = "$expected"
           done < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
 
-          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
           immutable="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.immutable')"
           if [[ "$immutable" != "true" ]]; then
