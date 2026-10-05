@@ -282,6 +282,7 @@ jobs:
 
           mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
           test "${#assets[@]}" -eq 4
+          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
