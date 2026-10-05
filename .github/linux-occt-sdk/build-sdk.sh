@@ -87,42 +87,46 @@ if [[ "$linkage" == "static" ]]; then
   opt_profile="Default"
 fi
 
-cmake \
-  -S "$source_dir" \
-  -B "$build_dir" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER_LAUNCHER="$script_dir/compiler-launcher.sh" \
-  -DCMAKE_CXX_COMPILER_LAUNCHER="$script_dir/compiler-launcher.sh" \
-  -DBUILD_CPP_STANDARD=C++17 \
-  -DBUILD_USE_PCH=OFF \
-  -DBUILD_GTEST=OFF \
-  -DBUILD_Inspector=OFF \
-  -DBUILD_MODULE_FoundationClasses=ON \
-  -DBUILD_MODULE_ModelingData=ON \
-  -DBUILD_MODULE_ModelingAlgorithms=ON \
-  -DBUILD_MODULE_ApplicationFramework=ON \
-  -DBUILD_MODULE_DataExchange=ON \
-  -DBUILD_MODULE_Visualization=OFF \
-  -DBUILD_MODULE_DETools=OFF \
-  -DBUILD_MODULE_Draw=OFF \
-  -DUSE_FREETYPE=OFF \
-  -DUSE_FREEIMAGE=OFF \
-  -DUSE_RAPIDJSON=OFF \
-  -DUSE_TBB=OFF \
-  -DUSE_TCL=OFF \
-  -DUSE_TK=OFF \
-  -DUSE_VTK=OFF \
-  -DUSE_OPENVR=OFF \
-  -DUSE_OPENGL=OFF \
-  -DUSE_GLES2=OFF \
-  -DUSE_XLIB=OFF \
-  -DUSE_D3D=OFF \
-  -DUSE_MMGR_TYPE=NATIVE \
-  -DBUILD_LIBRARY_TYPE="$library_type" \
-  -DBUILD_OPT_PROFILE="$opt_profile" \
-  -DINSTALL_DIR_LAYOUT=Unix \
-  -DINSTALL_DIR="$prefix" \
-  -D3RDPARTY_DIR=
+cmake_options=(
+  "-DCMAKE_BUILD_TYPE=Release"
+  "-DCMAKE_C_COMPILER_LAUNCHER=$script_dir/compiler-launcher.sh"
+  "-DCMAKE_CXX_COMPILER_LAUNCHER=$script_dir/compiler-launcher.sh"
+  "-DBUILD_CPP_STANDARD=C++17"
+  "-DBUILD_USE_PCH=OFF"
+  "-DBUILD_GTEST=OFF"
+  "-DBUILD_Inspector=OFF"
+  "-DBUILD_MODULE_FoundationClasses=ON"
+  "-DBUILD_MODULE_ModelingData=ON"
+  "-DBUILD_MODULE_ModelingAlgorithms=ON"
+  "-DBUILD_MODULE_ApplicationFramework=ON"
+  "-DBUILD_MODULE_DataExchange=ON"
+  "-DBUILD_MODULE_Visualization=OFF"
+  "-DBUILD_MODULE_DETools=OFF"
+  "-DBUILD_MODULE_Draw=OFF"
+  "-DUSE_FREETYPE=OFF"
+  "-DUSE_FREEIMAGE=OFF"
+  "-DUSE_FFMPEG=OFF"
+  "-DUSE_RAPIDJSON=OFF"
+  "-DUSE_DRACO=OFF"
+  "-DUSE_TBB=OFF"
+  "-DUSE_EIGEN=OFF"
+  "-DUSE_TCL=OFF"
+  "-DUSE_TK=OFF"
+  "-DUSE_VTK=OFF"
+  "-DUSE_OPENVR=OFF"
+  "-DUSE_OPENGL=OFF"
+  "-DUSE_GLES2=OFF"
+  "-DUSE_XLIB=OFF"
+  "-DUSE_D3D=OFF"
+  "-DUSE_MMGR_TYPE=NATIVE"
+  "-DBUILD_LIBRARY_TYPE=$library_type"
+  "-DBUILD_OPT_PROFILE=$opt_profile"
+  "-DINSTALL_DIR_LAYOUT=Unix"
+  "-DINSTALL_DIR=$prefix"
+  "-D3RDPARTY_DIR="
+)
+printf '%s\n' "${cmake_options[@]}" > "$build_dir/configure-options.txt"
+cmake -S "$source_dir" -B "$build_dir" "${cmake_options[@]}"
 
 cmake --build "$build_dir" --parallel 4
 cmake --install "$build_dir" --config Release
@@ -145,6 +149,8 @@ PY
 "$python_bin" "$script_dir/sdk_tools.py" manifest \
   --prefix "$prefix" \
   --consumer "$consumer_pre/occt_sdk_consumer" \
+  --cmake-cache "$build_dir/CMakeCache.txt" \
+  --configure-options "$build_dir/configure-options.txt" \
   --linkage "$linkage" \
   --source-sha "$SOURCE_SHA" \
   --event-sha "$EVENT_SHA" \

@@ -81,6 +81,49 @@ def exported_modules(prefix: pathlib.Path):
     return match.group(1).replace(";", " ").split() if match else []
 
 
+def normalize_build_path(value: str, prefix: pathlib.Path) -> str:
+    replacements = (
+        (str(prefix), "<sdk-prefix>"),
+        ("/work/stage", "<stage-dir>"),
+        ("/work/build", "<build-dir>"),
+        ("/work/src", "<source-dir>"),
+    )
+    for old, new in replacements:
+        value = value.replace(old, new)
+    return value
+
+
+def requested_cmake_options(path: pathlib.Path, prefix: pathlib.Path):
+    result = {}
+    pattern = re.compile(r"^-D([^:=]+)(?::[^=]+)?=(.*)$")
+    for line in path.read_text().splitlines():
+        match = pattern.match(line)
+        require(match is not None, f"invalid recorded CMake option: {line}")
+        result[match.group(1)] = normalize_build_path(match.group(2), prefix)
+    return dict(sorted(result.items()))
+
+
+def resolved_cmake_options(path: pathlib.Path, prefix: pathlib.Path):
+    result = {}
+    exact = {
+        "3RDPARTY_DIR",
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_C_COMPILER_LAUNCHER",
+        "CMAKE_CXX_COMPILER_LAUNCHER",
+    }
+    for line in path.read_text(errors="replace").splitlines():
+        if not line or line.startswith(("#", "//")) or ":" not in line or "=" not in line:
+            continue
+        name_type, value = line.split("=", 1)
+        name, cache_type = name_type.split(":", 1)
+        if cache_type in {"INTERNAL", "STATIC"}:
+            continue
+        if not (name in exact or name.startswith(("BUILD_", "USE_", "INSTALL_DIR"))):
+            continue
+        result[name] = normalize_build_path(value, prefix)
+    return dict(sorted(result.items()))
+
+
 def representative_hashes(prefix: pathlib.Path, linkage: str):
     candidates = [
         prefix / "include/opencascade/Standard_Version.hxx",
@@ -137,38 +180,8 @@ def make_manifest(args):
     consumer = pathlib.Path(args.consumer).resolve()
     shared = real_shared_objects(prefix) if args.linkage == "shared" else []
     cmake_options = {
-        "CMAKE_BUILD_TYPE": "Release",
-        "BUILD_CPP_STANDARD": "C++17",
-        "BUILD_USE_PCH": "OFF",
-        "BUILD_GTEST": "OFF",
-        "BUILD_Inspector": "OFF",
-        "BUILD_MODULE_FoundationClasses": "ON",
-        "BUILD_MODULE_ModelingData": "ON",
-        "BUILD_MODULE_ModelingAlgorithms": "ON",
-        "BUILD_MODULE_ApplicationFramework": "ON",
-        "BUILD_MODULE_DataExchange": "ON",
-        "BUILD_MODULE_Visualization": "OFF",
-        "BUILD_MODULE_DETools": "OFF",
-        "BUILD_MODULE_Draw": "OFF",
-        "USE_FREETYPE": "OFF",
-        "USE_FREEIMAGE": "OFF",
-        "USE_RAPIDJSON": "OFF",
-        "USE_TBB": "OFF",
-        "USE_TCL": "OFF",
-        "USE_TK": "OFF",
-        "USE_VTK": "OFF",
-        "USE_OPENVR": "OFF",
-        "USE_OPENGL": "OFF",
-        "USE_GLES2": "OFF",
-        "USE_XLIB": "OFF",
-        "USE_D3D": "OFF",
-        "USE_MMGR_TYPE": "NATIVE",
-        "BUILD_LIBRARY_TYPE": "Shared" if args.linkage == "shared" else "Static",
-        "BUILD_OPT_PROFILE": "Production" if args.linkage == "shared" else "Default",
-        "INSTALL_DIR_LAYOUT": "Unix",
-        "INSTALL_DIR": "<sdk-prefix>",
-        "CMAKE_C_COMPILER_LAUNCHER": "compiler-launcher.sh",
-        "CMAKE_CXX_COMPILER_LAUNCHER": "compiler-launcher.sh",
+        "requested": requested_cmake_options(pathlib.Path(args.configure_options), prefix),
+        "resolved_cache": resolved_cmake_options(pathlib.Path(args.cmake_cache), prefix),
     }
     manifest = {
         "schema_version": 1,
@@ -275,6 +288,8 @@ def main():
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--prefix", required=True)
     manifest.add_argument("--consumer", required=True)
+    manifest.add_argument("--cmake-cache", required=True)
+    manifest.add_argument("--configure-options", required=True)
     manifest.add_argument("--linkage", choices=("shared", "static"), required=True)
     manifest.add_argument("--source-sha", required=True)
     manifest.add_argument("--event-sha", required=True)
