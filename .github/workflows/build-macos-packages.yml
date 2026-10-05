@@ -1,0 +1,402 @@
+name: Build macOS OCCT SDK packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-793
+    paths:
+      - CMakeLists.txt
+      - adm/**
+      - src/**
+      - .github/macos-occt-sdk/**
+      - .github/workflows/build-macos-packages.yml
+  push:
+    branches:
+      - OCCT-793
+      - macos-occt-sdk
+    tags:
+      - occt-macos-sdk-*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  OCCT_VERSION: '7.9.3'
+  OCCT_793_BASE_SHA: a016080bf6738d6aeae020badee4e888ad1540a5
+
+jobs:
+  metadata:
+    name: Resolve source identity
+    runs-on: ubuntu-24.04
+    outputs:
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      source_version: ${{ steps.source.outputs.source_version }}
+      event_sha: ${{ steps.source.outputs.event_sha }}
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: automation
+          fetch-depth: 1
+
+      - name: Checkout exact OCCT source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.OCCT_793_BASE_SHA }}
+          path: source
+          fetch-depth: 1
+
+      - name: Record workflow and source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_sha="$(git -C automation rev-parse HEAD)"
+          source_sha="$(git -C source rev-parse HEAD)"
+          test "$source_sha" = "$OCCT_793_BASE_SHA"
+          source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          source_version="$major.$minor.$patch"
+          test "$source_version" = "$OCCT_VERSION"
+          echo "workflow_sha=$workflow_sha" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "event_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  helper-validation:
+    name: Validate macOS SDK helpers
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Check helper syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            .github/macos-occt-sdk/build-sdk.sh \
+            .github/macos-occt-sdk/package-sdk.sh \
+            .github/macos-occt-sdk/provision-cmake.sh \
+            .github/macos-occt-sdk/run-consumer.sh \
+            .github/macos-occt-sdk/select-toolchain.sh \
+            .github/macos-occt-sdk/validate-artifact.sh \
+            .github/macos-occt-sdk/verify-release-assets.sh \
+            .github/macos-occt-sdk/verify-tag.sh; do
+            bash -n "$script"
+          done
+          python3 -m py_compile .github/macos-occt-sdk/sdk_tools.py
+
+  build:
+    name: ${{ matrix.architecture }} / ${{ matrix.linkage }}
+    needs:
+      - metadata
+      - helper-validation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            linkage: shared
+            runner: macos-15
+          - architecture: arm64
+            linkage: static
+            runner: macos-15
+          - architecture: x86_64
+            linkage: shared
+            runner: macos-15-intel
+          - architecture: x86_64
+            linkage: static
+            runner: macos-15-intel
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          path: automation
+
+      - name: Checkout pinned OCCT source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          path: source
+
+      - name: Select Xcode 16.4 toolchain
+        shell: bash
+        run: bash automation/.github/macos-occt-sdk/select-toolchain.sh "${{ matrix.architecture }}"
+
+      - name: Provision checksum-pinned CMake
+        shell: bash
+        run: bash automation/.github/macos-occt-sdk/provision-cmake.sh
+
+      - name: Verify producer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cmake --version | sed -n '1s/^cmake version //p')" = "4.4.3"
+          make --version | head -n 1
+          gtar --version | head -n 1
+          gzip --version | head -n 1
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+
+      - name: Build, package and qualify SDK
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          EVENT_SHA: ${{ needs.metadata.outputs.event_sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
+          OCCT_AUTOMATION_DIR: ${{ github.workspace }}/automation
+          OCCT_SOURCE_DIR: ${{ github.workspace }}/source
+        run: |
+          set -euo pipefail
+          bash automation/.github/macos-occt-sdk/build-sdk.sh \
+            "${{ matrix.architecture }}" \
+            "${{ matrix.linkage }}" \
+            "${{ matrix.runner }}"
+
+      # actions/upload-artifact v4.6.2
+      - name: Upload qualified SDK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-macos-sdk-${{ matrix.architecture }}-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/occt-macos-sdk-out/${{ matrix.architecture }}/${{ matrix.linkage }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  compatibility:
+    name: Verify ${{ matrix.architecture }} / ${{ matrix.linkage }} package
+    needs:
+      - metadata
+      - build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            linkage: shared
+            runner: macos-15
+          - architecture: arm64
+            linkage: static
+            runner: macos-15
+          - architecture: x86_64
+            linkage: shared
+            runner: macos-15-intel
+          - architecture: x86_64
+            linkage: static
+            runner: macos-15-intel
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Select Xcode 16.4 toolchain
+        shell: bash
+        run: bash .github/macos-occt-sdk/select-toolchain.sh "${{ matrix.architecture }}"
+
+      - name: Provision checksum-pinned CMake
+        shell: bash
+        run: bash .github/macos-occt-sdk/provision-cmake.sh
+
+      # actions/download-artifact v4.3.0
+      - name: Download qualified SDK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-macos-sdk-${{ matrix.architecture }}-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify, relocate and run external consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/macos-occt-sdk/validate-artifact.sh \
+            "$RUNNER_TEMP/artifact" \
+            "${{ matrix.linkage }}" \
+            "${{ matrix.architecture }}" \
+            "${{ matrix.architecture }}"
+
+  publish:
+    name: Publish immutable macOS SDK release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/occt-macos-sdk-')
+    needs:
+      - metadata
+      - build
+      - compatibility
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      POLICY_TOKEN: ${{ secrets.OCCT_RELEASE_POLICY_TOKEN }}
+      WORKFLOW_SHA: ${{ needs.metadata.outputs.workflow_sha }}
+      SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+    steps:
+      - name: Require release-policy credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$POLICY_TOKEN" ]]; then
+            echo "OCCT_RELEASE_POLICY_TOKEN with Administration read permission is required for immutable-release preflight." >&2
+            exit 1
+          fi
+
+      # actions/checkout v4.2.2
+      - name: Checkout complete workflow history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          fetch-depth: 0
+
+      - name: Prove workflow lineage and pinned OCCT source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.metadata.outputs.source_version }}" = "$OCCT_VERSION"
+          test "$SOURCE_SHA" = "$OCCT_793_BASE_SHA"
+          git fetch origin +refs/heads/OCCT-793:refs/remotes/origin/OCCT-793
+          git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$WORKFLOW_SHA"
+          git merge-base --is-ancestor "$WORKFLOW_SHA" refs/remotes/origin/OCCT-793
+
+      - name: Verify immutable releases are enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          enabled="$(GH_TOKEN="$POLICY_TOKEN" gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')"
+          if [[ "$enabled" != "true" ]]; then
+            echo "GitHub immutable releases are not enabled for $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+
+      - name: Re-resolve triggering tag
+        shell: bash
+        run: bash .github/macos-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+
+      # actions/download-artifact v4.3.0
+      - name: Download all qualified SDK assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-macos-sdk-*
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Verify exact release asset inventory and provenance
+        shell: bash
+        run: bash .github/macos-occt-sdk/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
+
+      - name: Create, verify and publish immutable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_version="2026-03-10"
+          published=0
+          draft_id=""
+          create_attempted=0
+
+          find_draft_id() {
+            gh api --paginate \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs --arg tag "$GITHUB_REF_NAME" '
+                [ .[][] | select(.tag_name == $tag and .draft == true) ] |
+                if length == 1 then .[0].id
+                elif length == 0 then empty
+                else error("multiple draft releases found for tag")
+                end
+              '
+          }
+
+          cleanup_draft() {
+            status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 && "$published" -eq 0 && "$create_attempted" -eq 1 ]]; then
+              if [[ -z "$draft_id" ]]; then
+                draft_id="$(find_draft_id 2>/dev/null || true)"
+              fi
+              if [[ -n "$draft_id" ]]; then
+                gh api -X DELETE \
+                  -H "X-GitHub-Api-Version: $api_version" \
+                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_draft EXIT
+
+          existing_draft_id="$(find_draft_id)"
+          if [[ -n "$existing_draft_id" ]] || gh api \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release already exists for $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          bash .github/macos-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+          bash .github/macos-occt-sdk/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
+
+          assets=(
+            "$RUNNER_TEMP/release-assets/"*.tar.gz
+            "$RUNNER_TEMP/release-assets/"*.tar.gz.sha256
+          )
+          test "${#assets[@]}" -eq 8
+
+          create_attempted=1
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "OCCT $OCCT_VERSION macOS SDK" \
+            --notes "OCCT $OCCT_VERSION macOS SDKs built from pinned OCCT source $SOURCE_SHA by workflow revision $WORKFLOW_SHA. Includes x86_64 and arm64 shared/static archives targeting macOS 13.0, qualified natively on GitHub-hosted macOS 15 runners."
+
+          draft_id="$(find_draft_id)"
+          if [[ -z "$draft_id" ]]; then
+            echo "created draft release could not be resolved by id" >&2
+            exit 1
+          fi
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          test "$(jq -r '.draft' <<<"$release_json")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 8
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
+
+          bash .github/macos-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+          gh api -X PATCH \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
+            -F draft=false >/dev/null
+          published=1
+
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          if [[ "$(jq -r '.immutable' <<<"$release_json")" != "true" ]]; then
+            echo "published release does not report immutable=true" >&2
+            exit 1
+          fi
+          bash .github/macos-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+          trap - EXIT
