@@ -22,10 +22,9 @@ build_dir="/work/build/${linkage}"
 stage_parent="/work/stage/${linkage}"
 prefix="$stage_parent/$sdk_name"
 out_dir="/work/out/${linkage}"
-script_dir="$source_dir/.github/linux-occt-sdk"
+script_dir="/work/automation/.github/linux-occt-sdk"
 consumer_pre="/work/consumer-pre/${linkage}"
 cmake_version="3.31.6"
-chmod +x "$script_dir/compiler-launcher.sh" "$script_dir/run-consumer.sh"
 
 find_python() {
   local candidate
