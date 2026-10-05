@@ -1,0 +1,306 @@
+name: Build Linux OCCT SDK packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-793
+    paths:
+      - CMakeLists.txt
+      - adm/**
+      - src/**
+      - .github/linux-occt-sdk/**
+      - .github/workflows/build-linux-packages.yml
+  push:
+    branches:
+      - OCCT-793
+    tags:
+      - occt-linux-sdk-*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  OCCT_VERSION: '7.9.3'
+  OCCT_793_BASE_SHA: a016080bf6738d6aeae020badee4e888ad1540a5
+  PRODUCER_IMAGE: quay.io/pypa/manylinux2014_x86_64
+  PRODUCER_IMAGE_TAG: '2026.10.03-1'
+  PRODUCER_IMAGE_DIGEST: sha256:ffd6d1f11237599748657996b750db6b3a5b724fea5a81cd9ea65add4f45b6c9
+
+jobs:
+  metadata:
+    name: Resolve source identity
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      source_version: ${{ steps.source.outputs.source_version }}
+      event_sha: ${{ steps.source.outputs.event_sha }}
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Record source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' adm/cmake/version.cmake)"
+          source_version="${major}.${minor}.${patch}"
+          test "$source_version" = "$OCCT_VERSION"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "event_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          printf 'event SHA: %s\nsource SHA: %s\nversion: %s\nSOURCE_DATE_EPOCH: %s\n' \
+            "$GITHUB_SHA" "$source_sha" "$source_version" "$source_date_epoch"
+
+  helper-validation:
+    name: Validate Linux SDK helpers
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout resolved source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+
+      - name: Check helper syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n .github/linux-occt-sdk/compiler-launcher.sh
+          bash -n .github/linux-occt-sdk/build-sdk.sh
+          bash -n .github/linux-occt-sdk/run-consumer.sh
+          bash -n .github/linux-occt-sdk/validate-artifact.sh
+          bash -n .github/linux-occt-sdk/verify-tag.sh
+          python3 -m py_compile .github/linux-occt-sdk/sdk_tools.py
+
+  build:
+    name: Build ${{ matrix.linkage }} SDK
+    needs:
+      - metadata
+      - helper-validation
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        linkage:
+          - shared
+          - static
+    steps:
+      - name: Checkout resolved source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+
+      - name: Pull pinned manylinux producer
+        shell: bash
+        run: docker pull "$PRODUCER_IMAGE@$PRODUCER_IMAGE_DIGEST"
+
+      - name: Build and qualify SDK in pinned producer
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          EVENT_SHA: ${{ needs.metadata.outputs.event_sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          work_dir="$RUNNER_TEMP/occt-linux-sdk"
+          mkdir -p "$work_dir"
+          docker run --rm \
+            -e SOURCE_SHA \
+            -e EVENT_SHA \
+            -e SOURCE_DATE_EPOCH \
+            -e PRODUCER_IMAGE \
+            -e PRODUCER_IMAGE_TAG \
+            -e PRODUCER_IMAGE_DIGEST \
+            -v "$work_dir:/work" \
+            -v "$GITHUB_WORKSPACE:/work/src" \
+            "$PRODUCER_IMAGE@$PRODUCER_IMAGE_DIGEST" \
+            bash /work/src/.github/linux-occt-sdk/build-sdk.sh "${{ matrix.linkage }}"
+
+      - name: Upload qualified SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: occt-linux-sdk-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/occt-linux-sdk/out/${{ matrix.linkage }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  compatibility:
+    name: Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.linkage }}
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu:
+          - '20.04'
+          - '22.04'
+          - '24.04'
+        linkage:
+          - shared
+          - static
+    steps:
+      - name: Install compatibility test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates cmake g++ make binutils file python3
+
+      - name: Checkout resolved source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+
+      - name: Download qualified SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: occt-linux-sdk-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify, extract and run external consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/linux-occt-sdk/validate-artifact.sh \
+            "$RUNNER_TEMP/artifact" "${{ matrix.linkage }}"
+
+  publish:
+    name: Publish immutable Linux SDK release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/occt-linux-sdk-')
+    needs:
+      - metadata
+      - build
+      - compatibility
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+    steps:
+      - name: Require immutable releases to be enabled
+        shell: bash
+        env:
+          IMMUTABLE_RELEASES_ENABLED: ${{ vars.OCCT_IMMUTABLE_RELEASES_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$IMMUTABLE_RELEASES_ENABLED" != "true" ]]; then
+            echo "Set repository variable OCCT_IMMUTABLE_RELEASES_ENABLED=true only after enabling GitHub immutable releases." >&2
+            exit 1
+          fi
+
+      - name: Checkout complete source history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          fetch-depth: 0
+
+      - name: Prove OCCT-793 lineage and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ needs.metadata.outputs.source_version }}" = "$OCCT_VERSION"
+          git fetch origin +refs/heads/OCCT-793:refs/remotes/origin/OCCT-793
+          git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/OCCT-793
+
+      - name: Re-resolve triggering tag
+        shell: bash
+        run: bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
+
+      - name: Download shared SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: occt-linux-sdk-shared
+          path: ${{ runner.temp }}/release-assets/shared
+
+      - name: Download static SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: occt-linux-sdk-static
+          path: ${{ runner.temp }}/release-assets/static
+
+      - name: Verify exact release assets and manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_root="$RUNNER_TEMP/release-assets"
+          for linkage in shared static; do
+            dir="$asset_root/$linkage"
+            checksum="$(find "$dir" -maxdepth 1 -type f -name '*.tar.gz.sha256' -print -quit)"
+            archive="${checksum%.sha256}"
+            test -f "$archive"
+            (cd "$dir" && sha256sum -c "$(basename "$checksum")")
+            manifest="$(tar -xOzf "$archive" --wildcards '*/build-manifest.json')"
+            test "$(jq -r '.occt.commit' <<<"$manifest")" = "$SOURCE_SHA"
+            test "$(jq -r '.occt.version' <<<"$manifest")" = "$OCCT_VERSION"
+            test "$(jq -r '.linkage' <<<"$manifest")" = "$linkage"
+          done
+
+      - name: Create, verify and publish immutable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists for $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          cleanup_draft() {
+            status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 ]]; then
+              draft="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.draft' 2>/dev/null || true)"
+              if [[ "$draft" == "true" ]]; then
+                gh release delete "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --yes || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_draft EXIT
+
+          mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
+          test "${#assets[@]}" -eq 4
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "OCCT $OCCT_VERSION Linux SDK" \
+            --notes "OCCT $OCCT_VERSION x86_64 Linux SDKs built from $SOURCE_SHA with the pinned manylinux2014/glibc 2.17 producer. Includes qualified shared and static archives and SHA-256 checksum files."
+
+          release_json="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME")"
+          while IFS= read -r file; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done < <(find "$RUNNER_TEMP/release-assets" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -print | sort)
+
+          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          immutable="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.immutable')"
+          if [[ "$immutable" != "true" ]]; then
+            echo "published release is not immutable; enable immutable releases for $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
+          trap - EXIT
