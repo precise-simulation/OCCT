@@ -11,6 +11,7 @@ import tarfile
 
 SYMBOL_PREFIXES = ("GLIBC_", "GLIBCXX_", "CXXABI_")
 LEAK_PATHS = (
+    b"/work/automation",
     b"/work/src",
     b"/work/build",
     b"/work/stage",
@@ -94,6 +95,7 @@ def normalize_build_path(value: str, prefix: pathlib.Path) -> str:
         ("/work/stage", "<stage-dir>"),
         ("/work/build", "<build-dir>"),
         ("/work/consumer", "<consumer-build>"),
+        ("/work/automation", "<automation-dir>"),
         ("/work/src", "<source-dir>"),
     )
     for old, new in replacements:
