@@ -7,6 +7,8 @@ on:
       - OCCT-793
     paths:
       - CMakeLists.txt
+      - LICENSE_LGPL_21.txt
+      - OCCT_LGPL_EXCEPTION.txt
       - adm/**
       - data/**
       - src/**
