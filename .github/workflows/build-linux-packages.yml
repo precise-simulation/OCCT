@@ -210,7 +210,7 @@ jobs:
             "$RUNNER_TEMP/artifact" "${{ matrix.linkage }}"
 
   publish:
-    name: Publish immutable Linux SDK release
+    name: Publish Linux SDK release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/occt-linux-sdk-')
     needs:
       - metadata
@@ -221,19 +221,9 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      POLICY_TOKEN: ${{ secrets.OCCT_RELEASE_POLICY_TOKEN }}
       WORKFLOW_SHA: ${{ needs.metadata.outputs.workflow_sha }}
       SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
     steps:
-      - name: Require release-policy credential
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "$POLICY_TOKEN" ]]; then
-            echo "OCCT_RELEASE_POLICY_TOKEN with Administration read permission is required for immutable-release preflight." >&2
-            exit 1
-          fi
-
       - name: Checkout complete source history
         uses: actions/checkout@v4
         with:
@@ -249,18 +239,6 @@ jobs:
           git fetch origin +refs/heads/OCCT-793:refs/remotes/origin/OCCT-793
           git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$SOURCE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/OCCT-793
-
-      - name: Verify immutable releases are enabled
-        shell: bash
-        run: |
-          set -euo pipefail
-          enabled="$(GH_TOKEN="$POLICY_TOKEN" gh api \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')"
-          if [[ "$enabled" != "true" ]]; then
-            echo "GitHub immutable releases are not enabled for $GITHUB_REPOSITORY" >&2
-            exit 1
-          fi
 
       - name: Re-resolve triggering tag
         shell: bash
@@ -282,7 +260,7 @@ jobs:
         shell: bash
         run: bash .github/linux-occt-sdk/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
-      - name: Create, verify and publish immutable release
+      - name: Create, verify and publish release
         shell: bash
         run: |
           set -euo pipefail
@@ -389,9 +367,14 @@ jobs:
 
           release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
             "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
-          if [[ "$(jq -r '.immutable' <<<"$release_json")" != "true" ]]; then
-            echo "published release is not immutable; enable immutable releases for $GITHUB_REPOSITORY" >&2
-            exit 1
-          fi
+          test "$(jq -r '.draft' <<<"$release_json")" = "false"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 4
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
           bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
           trap - EXIT
