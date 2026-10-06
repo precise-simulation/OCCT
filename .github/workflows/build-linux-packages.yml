@@ -18,7 +18,6 @@ on:
   push:
     branches:
       - OCCT-793
-      - linux-occt-sdk
 
 permissions:
   contents: read
@@ -161,7 +160,7 @@ jobs:
           name: occt-linux-sdk-${{ matrix.linkage }}
           path: ${{ runner.temp }}/occt-linux-sdk/out/${{ matrix.linkage }}/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
   compatibility:
     name: Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.linkage }}

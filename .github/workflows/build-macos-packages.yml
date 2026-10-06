@@ -15,7 +15,6 @@ on:
   push:
     branches:
       - OCCT-793
-      - macos-occt-sdk
 
 permissions:
   contents: read
@@ -177,7 +176,7 @@ jobs:
           name: occt-macos-sdk-${{ matrix.architecture }}-${{ matrix.linkage }}
           path: ${{ runner.temp }}/occt-macos-sdk-out/${{ matrix.architecture }}/${{ matrix.linkage }}/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
   compatibility:
     name: Verify ${{ matrix.architecture }} / ${{ matrix.linkage }} package
