@@ -610,6 +610,7 @@ def verify_consumer(args):
         link_text = pathlib.Path(args.link_command).read_text(errors="replace")
         cache_text = pathlib.Path(args.cmake_cache).read_text(errors="replace")
         sdk_path = run("xcrun", "--sdk", "macosx", "--show-sdk-path").strip()
+        sdk_frameworks = (pathlib.Path(sdk_path) / "System/Library/Frameworks").resolve()
         for framework, variable in FRAMEWORK_VARS.items():
             match = re.search(
                 rf"^{re.escape(variable)}:FILEPATH=(.+)$",
@@ -626,9 +627,10 @@ def verify_consumer(args):
                 f"consumer resolved unexpected {framework} location: {resolved}",
             )
             resolved_text = str(resolved)
+            resolved_frameworks = resolved.parent.resolve()
             require(
                 resolved_text.startswith("/System/Library/Frameworks/")
-                or resolved_text.startswith(str(pathlib.Path(sdk_path) / "System/Library/Frameworks")),
+                or resolved_frameworks == sdk_frameworks,
                 f"consumer resolved {framework} outside the Apple system/selected SDK: {resolved}",
             )
             require(
