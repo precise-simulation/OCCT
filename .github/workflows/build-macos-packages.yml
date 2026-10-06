@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: macos-occt-sdk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   OCCT_VERSION: '7.9.3'
