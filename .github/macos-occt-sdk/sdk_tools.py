@@ -23,6 +23,9 @@ FRAMEWORK_VARS = {
     "AppKit": "OpenCASCADE_AppKit_FRAMEWORK",
     "IOKit": "OpenCASCADE_IOKit_FRAMEWORK",
 }
+APPLE_SDK_FRAMEWORK_RE = re.compile(
+    r"/[^;\"\n]*MacOSX[^;\"\n]*\.sdk/System/Library/Frameworks/(AppKit|IOKit)\.framework"
+)
 OPTIONAL_DEP_RE = re.compile(
     r"(freetype|freeimage|libtbb|vtk|tcl|tk8|openvr|draco|avcodec|avformat|"
     r"swscale|avutil|X11|Xmu|libGL|OpenGL\.framework)",
@@ -421,20 +424,20 @@ def normalize_static_frameworks(args):
     require(targets, "no installed target exports found")
 
     replacements = {}
-    counts = {}
-    for framework, variable in FRAMEWORK_VARS.items():
-        producer_path = str(sdk_path / "System/Library/Frameworks" / f"{framework}.framework")
-        replacements[producer_path] = f"${{{variable}}}"
-        counts[framework] = 0
+    counts = {framework: 0 for framework in FRAMEWORK_VARS}
 
     for target in targets:
         original = target.read_text(encoding="utf-8")
-        changed = original
-        for producer_path, replacement in replacements.items():
-            count = changed.count(producer_path)
-            if count:
-                counts[pathlib.Path(producer_path).stem] += count
-                changed = changed.replace(producer_path, replacement)
+
+        def replace_framework(match):
+            producer_path = match.group(0)
+            framework = match.group(1)
+            replacement = f"${{{FRAMEWORK_VARS[framework]}}}"
+            replacements[producer_path] = replacement
+            counts[framework] += 1
+            return replacement
+
+        changed = APPLE_SDK_FRAMEWORK_RE.sub(replace_framework, original)
         if changed != original:
             target.write_text(changed, encoding="utf-8", newline="\n")
 

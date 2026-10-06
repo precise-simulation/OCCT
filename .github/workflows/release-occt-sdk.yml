@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - occt-sdk-*
+      - occt-sdk-7.9.3
 
 permissions:
   contents: read
@@ -142,6 +142,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REF_NAME" = "occt-sdk-$OCCT_VERSION"
           bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
           bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
@@ -254,6 +255,7 @@ jobs:
           release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
             "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
           test "$(jq -r '.draft' <<<"$release_json")" = "false"
+          test "$(jq -r '.immutable' <<<"$release_json")" = "true"
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
           test "$(jq '.assets | length' <<<"$release_json")" -eq 14
           for file in "${assets[@]}"; do

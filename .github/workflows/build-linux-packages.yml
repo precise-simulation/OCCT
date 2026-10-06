@@ -25,7 +25,7 @@ permissions:
 
 concurrency:
   group: linux-occt-sdk-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   OCCT_VERSION: '7.9.3'
@@ -46,13 +46,13 @@ jobs:
       event_sha: ${{ steps.source.outputs.event_sha }}
     steps:
       - name: Checkout exact workflow revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           path: automation
           fetch-depth: 1
 
       - name: Checkout exact OCCT source revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.OCCT_793_BASE_SHA }}
           path: source
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout workflow helpers
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.metadata.outputs.workflow_sha }}
 
@@ -117,13 +117,13 @@ jobs:
           - static
     steps:
       - name: Checkout workflow helpers
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.metadata.outputs.workflow_sha }}
           path: automation
 
       - name: Checkout pinned OCCT source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.metadata.outputs.source_sha }}
           path: source
@@ -156,7 +156,7 @@ jobs:
             bash /work/automation/.github/linux-occt-sdk/build-sdk.sh "${{ matrix.linkage }}"
 
       - name: Upload qualified SDK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: occt-linux-sdk-${{ matrix.linkage }}
           path: ${{ runner.temp }}/occt-linux-sdk/out/${{ matrix.linkage }}/*
@@ -191,12 +191,12 @@ jobs:
             ca-certificates cmake g++ make binutils file python3
 
       - name: Checkout workflow helpers
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.metadata.outputs.workflow_sha }}
 
       - name: Download qualified SDK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: occt-linux-sdk-${{ matrix.linkage }}
           path: ${{ runner.temp }}/artifact

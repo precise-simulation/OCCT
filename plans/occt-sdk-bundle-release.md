@@ -12,8 +12,9 @@ qualified SDK artifacts for all supported desktop platforms:
 - macOS x86_64 and arm64: build and qualify shared and static SDKs with the
   existing macOS producer.
 
-The release tag namespace is `occt-sdk-*`; for 7.9.3 the intended tag is
-`occt-sdk-7.9.3`.
+The 7.9.3 workflow accepts only the exact release tag `occt-sdk-7.9.3`; a future
+OCCT version must update the pinned source and platform metadata before its tag is
+enabled.
 
 ## Source and artifact identity
 
@@ -49,6 +50,7 @@ The release contains exactly 14 uploaded assets:
 The publish job re-verifies every platform inventory, every adjacent checksum,
 the Windows upstream digest, the release tag target, the total 14-file inventory,
 and GitHub's computed digest for every uploaded asset before publishing the draft.
+After publication it also requires GitHub to report the release as immutable.
 
 ## Acceptance
 
