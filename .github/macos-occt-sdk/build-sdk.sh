@@ -96,7 +96,7 @@ printf '%s\n' "${cmake_options[@]}" > "$build_dir/configure-options.txt"
 cmake -G "Unix Makefiles" -S "$source_dir" -B "$build_dir" "${cmake_options[@]}"
 
 cache_arch="$(sed -n 's/^CMAKE_OSX_ARCHITECTURES:STRING=//p' "$build_dir/CMakeCache.txt")"
-cache_target="$(sed -n 's/^CMAKE_OSX_DEPLOYMENT_TARGET:STRING=//p' "$build_dir/CMakeCache.txt")"
+cache_target="$(sed -n 's/^CMAKE_OSX_DEPLOYMENT_TARGET:[^=]*=//p' "$build_dir/CMakeCache.txt")"
 cache_sysroot="$(sed -n 's/^CMAKE_OSX_SYSROOT:[^=]*=//p' "$build_dir/CMakeCache.txt")"
 if [[ "$cache_arch" != "$architecture" || "$cache_target" != "$deployment_target" || "$cache_sysroot" != "$OCCT_MACOS_SDK" ]]; then
   echo "configured architecture/deployment target/sysroot mismatch: $cache_arch / $cache_target / $cache_sysroot" >&2
