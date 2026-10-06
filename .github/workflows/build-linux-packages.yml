@@ -1,6 +1,7 @@
 name: Build Linux OCCT SDK packages
 
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
     branches:
@@ -18,15 +19,13 @@ on:
     branches:
       - OCCT-793
       - linux-occt-sdk
-    tags:
-      - occt-linux-sdk-*
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: linux-occt-sdk-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   OCCT_VERSION: '7.9.3'
@@ -55,7 +54,7 @@ jobs:
       - name: Checkout exact OCCT source revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.OCCT_793_BASE_SHA }}
           path: source
           fetch-depth: 1
 
@@ -66,8 +65,8 @@ jobs:
           set -euo pipefail
           workflow_sha="$(git -C automation rev-parse HEAD)"
           source_sha="$(git -C source rev-parse HEAD)"
-          test "$workflow_sha" = "$source_sha"
-          test "$source_sha" = "$GITHUB_SHA"
+          test "$workflow_sha" = "$GITHUB_SHA"
+          test "$source_sha" = "$OCCT_793_BASE_SHA"
           source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
           major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
           minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
@@ -208,173 +207,3 @@ jobs:
           set -euo pipefail
           bash .github/linux-occt-sdk/validate-artifact.sh \
             "$RUNNER_TEMP/artifact" "${{ matrix.linkage }}"
-
-  publish:
-    name: Publish Linux SDK release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/occt-linux-sdk-')
-    needs:
-      - metadata
-      - build
-      - compatibility
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      WORKFLOW_SHA: ${{ needs.metadata.outputs.workflow_sha }}
-      SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
-    steps:
-      - name: Checkout complete source history
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.metadata.outputs.source_sha }}
-          fetch-depth: 0
-
-      - name: Prove OCCT-793 source lineage
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "${{ needs.metadata.outputs.source_version }}" = "$OCCT_VERSION"
-          test "$WORKFLOW_SHA" = "$SOURCE_SHA"
-          git fetch origin +refs/heads/OCCT-793:refs/remotes/origin/OCCT-793
-          git merge-base --is-ancestor "$OCCT_793_BASE_SHA" "$SOURCE_SHA"
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/OCCT-793
-
-      - name: Re-resolve triggering tag
-        shell: bash
-        run: bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
-
-      - name: Download shared SDK
-        uses: actions/download-artifact@v4
-        with:
-          name: occt-linux-sdk-shared
-          path: ${{ runner.temp }}/release-assets
-
-      - name: Download static SDK
-        uses: actions/download-artifact@v4
-        with:
-          name: occt-linux-sdk-static
-          path: ${{ runner.temp }}/release-assets
-
-      - name: Verify exact release asset inventory and provenance
-        shell: bash
-        run: bash .github/linux-occt-sdk/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
-
-      - name: Create, verify and publish release
-        shell: bash
-        run: |
-          set -euo pipefail
-          api_version="2026-03-10"
-          published=0
-          draft_id=""
-          create_attempted=0
-          run_marker="occt-linux-sdk-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
-
-          find_draft_id() {
-            gh api --paginate \
-              -H "X-GitHub-Api-Version: $api_version" \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
-              jq -rs --arg tag "$GITHUB_REF_NAME" '
-                [ .[][] | select(.tag_name == $tag and .draft == true) ] |
-                if length == 1 then .[0].id
-                elif length == 0 then empty
-                else error("multiple draft releases found for tag")
-                end
-              '
-          }
-
-          find_our_draft_id() {
-            gh api --paginate \
-              -H "X-GitHub-Api-Version: $api_version" \
-              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
-              jq -rs --arg tag "$GITHUB_REF_NAME" --arg marker "$run_marker" '
-                [ .[][] |
-                  select(.tag_name == $tag and .draft == true) |
-                  select((.body // "") | contains($marker))
-                ] |
-                if length == 1 then .[0].id
-                elif length == 0 then empty
-                else error("multiple workflow-owned draft releases found for tag")
-                end
-              '
-          }
-
-          cleanup_draft() {
-            status=$?
-            trap - EXIT
-            if [[ "$status" -ne 0 && "$published" -eq 0 && "$create_attempted" -eq 1 ]]; then
-              if [[ -z "$draft_id" ]]; then
-                draft_id="$(find_our_draft_id 2>/dev/null || true)"
-              fi
-              if [[ -n "$draft_id" ]]; then
-                gh api -X DELETE \
-                  -H "X-GitHub-Api-Version: $api_version" \
-                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
-              fi
-            fi
-            exit "$status"
-          }
-          trap cleanup_draft EXIT
-
-          existing_draft_id="$(find_draft_id)"
-          if [[ -n "$existing_draft_id" ]] || gh api \
-            -H "X-GitHub-Api-Version: $api_version" \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "release already exists for $GITHUB_REF_NAME" >&2
-            exit 1
-          fi
-
-          bash .github/linux-occt-sdk/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
-          assets=(
-            "$RUNNER_TEMP/release-assets/"*.tar.gz
-            "$RUNNER_TEMP/release-assets/"*.tar.gz.sha256
-          )
-          test "${#assets[@]}" -eq 4
-          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
-          notes="OCCT $OCCT_VERSION x86_64 Linux SDKs built from source $SOURCE_SHA by workflow revision $WORKFLOW_SHA with the pinned manylinux2014/glibc 2.17 producer. Includes qualified shared and static archives and SHA-256 checksum files."
-          notes="$notes"$'\n\n'"<!-- $run_marker -->"
-          create_attempted=1
-          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --draft \
-            --title "OCCT $OCCT_VERSION Linux SDK" \
-            --notes "$notes"
-
-          draft_id="$(find_our_draft_id)"
-          if [[ -z "$draft_id" ]]; then
-            echo "created draft release could not be resolved by id" >&2
-            exit 1
-          fi
-          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
-            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
-          test "$(jq -r '.draft' <<<"$release_json")" = "true"
-          test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 4
-          for file in "${assets[@]}"; do
-            name="$(basename "$file")"
-            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
-            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
-            test "$actual" = "$expected"
-          done
-
-          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
-          gh api -X PATCH \
-            -H "X-GitHub-Api-Version: $api_version" \
-            "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
-            -F draft=false >/dev/null
-          published=1
-
-          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
-            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
-          test "$(jq -r '.draft' <<<"$release_json")" = "false"
-          test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 4
-          for file in "${assets[@]}"; do
-            name="$(basename "$file")"
-            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
-            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
-            test "$actual" = "$expected"
-          done
-          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$SOURCE_SHA"
-          trap - EXIT

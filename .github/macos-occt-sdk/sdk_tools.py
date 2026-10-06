@@ -34,6 +34,17 @@ def run(*args: str) -> str:
     return subprocess.check_output(args, text=True, errors="replace")
 
 
+def run_combined(*args: str) -> str:
+    return subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        check=True,
+    ).stdout
+
+
 def run_ok(*args: str) -> bool:
     return subprocess.run(
         args,
@@ -557,7 +568,7 @@ def make_thin_manifest(args):
             "generator": args.generator,
             "make": run("make", "--version").splitlines()[0],
             "gtar": run("gtar", "--version").splitlines()[0],
-            "gzip": run("gzip", "--version").splitlines()[0],
+            "gzip": run_combined("gzip", "--version").splitlines()[0],
             "source_date_epoch": int(args.source_date_epoch),
             "forbidden_paths": sorted(set(args.forbidden_path or [])),
         },
