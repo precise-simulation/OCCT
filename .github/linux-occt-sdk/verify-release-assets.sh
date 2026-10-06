@@ -25,7 +25,9 @@ for linkage in shared static; do
   checksum="$archive.sha256"
   test -f "$archive"
   test -f "$checksum"
-  (cd "$asset_root" && sha256sum -c "$(basename "$checksum")")
+  expected="$(awk '{print $1}' "$checksum" | tr -d '\r')"
+  actual="$(sha256sum "$archive" | awk '{print $1}')"
+  test "$expected" = "$actual"
   manifest="$(tar -xOzf "$archive" --wildcards '*/build-manifest.json')"
   test "$(jq -r '.occt.commit' <<<"$manifest")" = "$SOURCE_SHA"
   test "$(jq -r '.occt.version' <<<"$manifest")" = "$version"
