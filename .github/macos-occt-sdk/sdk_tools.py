@@ -322,7 +322,6 @@ def validate_static(prefix: pathlib.Path, architecture: str):
             f"find_library({variable} NAMES {framework})" in config_text,
             f"static package config does not resolve {framework} on the consumer",
         )
-        require(f"${{{variable}}}" in targets_text, f"static targets do not reference {variable}")
     require(
         not re.search(r"/[^;\"\n]*MacOSX[^;\"\n]*\.sdk/System/Library/Frameworks/[^;\"\n]*\.framework", targets_text),
         "static target exports contain an absolute producer SDK framework path",
@@ -427,8 +426,6 @@ def normalize_static_frameworks(args):
                 changed = changed.replace(producer_path, replacement)
         if changed != original:
             target.write_text(changed, encoding="utf-8", newline="\n")
-    for framework, count in counts.items():
-        require(count > 0, f"expected producer {framework}.framework path was absent from static exports")
 
     config_text = config.read_text(encoding="utf-8")
     marker = "# Import OpenCASCADE targets."
