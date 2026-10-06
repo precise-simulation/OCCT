@@ -1,0 +1,208 @@
+name: Build Linux OCCT SDK packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-801
+    paths:
+      - CMakeLists.txt
+      - LICENSE_LGPL_21.txt
+      - OCCT_LGPL_EXCEPTION.txt
+      - adm/**
+      - data/**
+      - src/**
+      - .github/linux-occt-sdk/**
+      - .github/workflows/build-linux-packages.yml
+  push:
+    branches:
+      - OCCT-801
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-occt-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  OCCT_VERSION: '8.0.1'
+  OCCT_801_BASE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
+  PRODUCER_IMAGE: quay.io/pypa/manylinux2014_x86_64
+  PRODUCER_IMAGE_TAG: '2026.10.03-1'
+  PRODUCER_IMAGE_DIGEST: sha256:ffd6d1f11237599748657996b750db6b3a5b724fea5a81cd9ea65add4f45b6c9
+
+jobs:
+  metadata:
+    name: Resolve source identity
+    runs-on: ubuntu-24.04
+    outputs:
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      source_version: ${{ steps.source.outputs.source_version }}
+      event_sha: ${{ steps.source.outputs.event_sha }}
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: automation
+          fetch-depth: 1
+
+      - name: Checkout exact OCCT source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.OCCT_801_BASE_SHA }}
+          path: source
+          fetch-depth: 1
+
+      - name: Record workflow and source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_sha="$(git -C automation rev-parse HEAD)"
+          source_sha="$(git -C source rev-parse HEAD)"
+          test "$workflow_sha" = "$GITHUB_SHA"
+          test "$source_sha" = "$OCCT_801_BASE_SHA"
+          source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          source_version="${major}.${minor}.${patch}"
+          test "$source_version" = "$OCCT_VERSION"
+          echo "workflow_sha=$workflow_sha" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "event_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          printf 'event SHA: %s\nworkflow SHA: %s\nsource SHA: %s\nversion: %s\nSOURCE_DATE_EPOCH: %s\n' \
+            "$GITHUB_SHA" "$workflow_sha" "$source_sha" "$source_version" "$source_date_epoch"
+
+  helper-validation:
+    name: Validate Linux SDK helpers
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Check helper syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n .github/linux-occt-sdk/compiler-launcher.sh
+          bash -n .github/linux-occt-sdk/build-sdk.sh
+          bash -n .github/linux-occt-sdk/run-consumer.sh
+          bash -n .github/linux-occt-sdk/validate-artifact.sh
+          bash -n .github/linux-occt-sdk/verify-release-assets.sh
+          bash -n .github/linux-occt-sdk/verify-tag.sh
+          python3 -m py_compile .github/linux-occt-sdk/sdk_tools.py
+
+  build:
+    name: Build ${{ matrix.linkage }} SDK
+    needs:
+      - metadata
+      - helper-validation
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        linkage:
+          - shared
+          - static
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          path: automation
+
+      - name: Checkout pinned OCCT source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          path: source
+
+      - name: Pull pinned manylinux producer
+        shell: bash
+        run: docker pull "$PRODUCER_IMAGE@$PRODUCER_IMAGE_DIGEST"
+
+      - name: Build and qualify SDK in pinned producer
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          EVENT_SHA: ${{ needs.metadata.outputs.event_sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
+        run: |
+          set -euo pipefail
+          work_dir="$RUNNER_TEMP/occt-linux-sdk"
+          mkdir -p "$work_dir"
+          docker run --rm \
+            -e SOURCE_SHA \
+            -e EVENT_SHA \
+            -e SOURCE_DATE_EPOCH \
+            -e PRODUCER_IMAGE \
+            -e PRODUCER_IMAGE_TAG \
+            -e PRODUCER_IMAGE_DIGEST \
+            -v "$work_dir:/work" \
+            -v "$GITHUB_WORKSPACE/source:/work/src:ro" \
+            -v "$GITHUB_WORKSPACE/automation:/work/automation:ro" \
+            "$PRODUCER_IMAGE@$PRODUCER_IMAGE_DIGEST" \
+            bash /work/automation/.github/linux-occt-sdk/build-sdk.sh "${{ matrix.linkage }}"
+
+      - name: Upload qualified SDK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-linux-sdk-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/occt-linux-sdk/out/${{ matrix.linkage }}/*
+          if-no-files-found: error
+          retention-days: 3
+
+  compatibility:
+    name: Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.linkage }}
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu:
+          - '20.04'
+          - '22.04'
+          - '24.04'
+        linkage:
+          - shared
+          - static
+    steps:
+      - name: Install compatibility test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates cmake g++ make binutils file python3
+
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Download qualified SDK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-linux-sdk-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify, extract and run external consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/linux-occt-sdk/validate-artifact.sh \
+            "$RUNNER_TEMP/artifact" "${{ matrix.linkage }}"

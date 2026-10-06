@@ -1,0 +1,233 @@
+name: Build macOS OCCT SDK packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-801
+    paths:
+      - CMakeLists.txt
+      - adm/**
+      - src/**
+      - .github/macos-occt-sdk/**
+      - .github/workflows/build-macos-packages.yml
+  push:
+    branches:
+      - OCCT-801
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-occt-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  OCCT_VERSION: '8.0.1'
+  OCCT_801_BASE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
+
+jobs:
+  metadata:
+    name: Resolve source identity
+    runs-on: ubuntu-24.04
+    outputs:
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      source_version: ${{ steps.source.outputs.source_version }}
+      event_sha: ${{ steps.source.outputs.event_sha }}
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: automation
+          fetch-depth: 1
+
+      - name: Checkout exact OCCT source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.OCCT_801_BASE_SHA }}
+          path: source
+          fetch-depth: 1
+
+      - name: Record workflow and source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_sha="$(git -C automation rev-parse HEAD)"
+          source_sha="$(git -C source rev-parse HEAD)"
+          test "$source_sha" = "$OCCT_801_BASE_SHA"
+          source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"
+          source_version="$major.$minor.$patch"
+          test "$source_version" = "$OCCT_VERSION"
+          echo "workflow_sha=$workflow_sha" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "source_date_epoch=$source_date_epoch" >> "$GITHUB_OUTPUT"
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "event_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  helper-validation:
+    name: Validate macOS SDK helpers
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Check helper syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            .github/macos-occt-sdk/build-sdk.sh \
+            .github/macos-occt-sdk/package-sdk.sh \
+            .github/macos-occt-sdk/provision-cmake.sh \
+            .github/macos-occt-sdk/run-consumer.sh \
+            .github/macos-occt-sdk/select-toolchain.sh \
+            .github/macos-occt-sdk/validate-artifact.sh \
+            .github/macos-occt-sdk/verify-release-assets.sh \
+            .github/macos-occt-sdk/verify-tag.sh; do
+            bash -n "$script"
+          done
+          python3 -m py_compile .github/macos-occt-sdk/sdk_tools.py
+
+  build:
+    name: ${{ matrix.architecture }} / ${{ matrix.linkage }}
+    needs:
+      - metadata
+      - helper-validation
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            linkage: shared
+            runner: macos-15
+          - architecture: arm64
+            linkage: static
+            runner: macos-15
+          - architecture: x86_64
+            linkage: shared
+            runner: macos-15-intel
+          - architecture: x86_64
+            linkage: static
+            runner: macos-15-intel
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+          path: automation
+
+      - name: Checkout pinned OCCT source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          path: source
+
+      - name: Select Xcode 16.4 toolchain
+        shell: bash
+        run: bash automation/.github/macos-occt-sdk/select-toolchain.sh "${{ matrix.architecture }}"
+
+      - name: Provision checksum-pinned CMake
+        shell: bash
+        run: bash automation/.github/macos-occt-sdk/provision-cmake.sh
+
+      - name: Verify producer tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cmake --version | sed -n '1s/^cmake version //p')" = "4.4.3"
+          make --version | head -n 1
+          gtar --version | head -n 1
+          gzip --version | head -n 1
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+
+      - name: Build, package and qualify SDK
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.metadata.outputs.source_sha }}
+          EVENT_SHA: ${{ needs.metadata.outputs.event_sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
+          OCCT_AUTOMATION_DIR: ${{ github.workspace }}/automation
+          OCCT_SOURCE_DIR: ${{ github.workspace }}/source
+        run: |
+          set -euo pipefail
+          bash automation/.github/macos-occt-sdk/build-sdk.sh \
+            "${{ matrix.architecture }}" \
+            "${{ matrix.linkage }}" \
+            "${{ matrix.runner }}"
+
+      # actions/upload-artifact v4.6.2
+      - name: Upload qualified SDK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-macos-sdk-${{ matrix.architecture }}-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/occt-macos-sdk-out/${{ matrix.architecture }}/${{ matrix.linkage }}/*
+          if-no-files-found: error
+          retention-days: 3
+
+  compatibility:
+    name: Verify ${{ matrix.architecture }} / ${{ matrix.linkage }} package
+    needs:
+      - metadata
+      - build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            linkage: shared
+            runner: macos-15
+          - architecture: arm64
+            linkage: static
+            runner: macos-15
+          - architecture: x86_64
+            linkage: shared
+            runner: macos-15-intel
+          - architecture: x86_64
+            linkage: static
+            runner: macos-15-intel
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout workflow helpers
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.metadata.outputs.workflow_sha }}
+
+      - name: Select Xcode 16.4 toolchain
+        shell: bash
+        run: bash .github/macos-occt-sdk/select-toolchain.sh "${{ matrix.architecture }}"
+
+      - name: Provision checksum-pinned CMake
+        shell: bash
+        run: bash .github/macos-occt-sdk/provision-cmake.sh
+
+      # actions/download-artifact v4.3.0
+      - name: Download qualified SDK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-macos-sdk-${{ matrix.architecture }}-${{ matrix.linkage }}
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify, relocate and run external consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/macos-occt-sdk/validate-artifact.sh \
+            "$RUNNER_TEMP/artifact" \
+            "${{ matrix.linkage }}" \
+            "${{ matrix.architecture }}" \
+            "${{ matrix.architecture }}"
