@@ -59,7 +59,7 @@ Use the upstream stable release as the source of truth. Before editing the
 workflows, determine all of the following:
 
 1. OCCT version, for example `8.0.1`.
-2. Upstream release tag, for example `V8_0_1`.
+2. Upstream GitHub Release tag, for example `V8.0.1`.
 3. The commit to which that upstream tag resolves after peeling annotated tags.
 4. The exact official Windows combined x64 Release asset name.
 5. The Windows asset byte size and SHA-256 reported by the upstream release.
@@ -69,9 +69,9 @@ Useful checks are:
 
 ```bash
 git ls-remote --tags https://github.com/Open-Cascade-SAS/OCCT.git \
-  refs/tags/V8_0_1 'refs/tags/V8_0_1^{}'
+  refs/tags/V8.0.1 'refs/tags/V8.0.1^{}'
 
-gh api repos/Open-Cascade-SAS/OCCT/releases/tags/V8_0_1 \
+gh api repos/Open-Cascade-SAS/OCCT/releases/tags/V8.0.1 \
   --jq '.assets[] | [.name, .size, .digest, .browser_download_url] | @tsv'
 ```
 
@@ -170,7 +170,10 @@ At minimum:
 1. Run `git diff --check` and review the complete release-related diff.
 2. Push the release workflow/helpers to the intended release branch.
 3. Confirm the Linux producer builds both shared and static packages and passes
-   its compatibility matrix on Ubuntu 20.04, 22.04, and 24.04.
+   its compatibility matrix on Ubuntu 20.04, 22.04, and 24.04. OCCT 8.0.1
+   headers do not compile with Ubuntu 20.04's default GCC 9, so the focal
+   compatibility jobs deliberately use GCC 10 while retaining the Ubuntu 20.04
+   runtime/glibc environment.
 4. Confirm the macOS producer builds and consumes all four native combinations:
    arm64/shared, arm64/static, x86_64/shared, and x86_64/static.
 5. Confirm manifests contain the exact upstream source SHA and version.

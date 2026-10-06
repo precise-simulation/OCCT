@@ -186,8 +186,19 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
+          cxx_package="g++"
+          cxx="g++"
+          if [[ "${{ matrix.ubuntu }}" == "20.04" ]]; then
+            # OCCT 8 headers require a newer compiler than Ubuntu 20.04's
+            # default GCC 9. Keep the focal runtime/glibc baseline while
+            # compiling the external consumer with GCC 10.
+            cxx_package="g++-10"
+            cxx="g++-10"
+          fi
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates cmake g++ make binutils file python3
+            ca-certificates cmake "$cxx_package" make binutils file python3
+          echo "CXX=$cxx" >> "$GITHUB_ENV"
+          "$cxx" --version | head -n 1
 
       - name: Checkout workflow helpers
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
