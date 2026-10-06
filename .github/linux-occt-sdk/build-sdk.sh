@@ -93,7 +93,6 @@ cmake_options=(
   "-DBUILD_CPP_STANDARD=C++17"
   "-DBUILD_USE_PCH=OFF"
   "-DBUILD_GTEST=OFF"
-  "-DBUILD_Inspector=OFF"
   "-DBUILD_MODULE_FoundationClasses=ON"
   "-DBUILD_MODULE_ModelingData=ON"
   "-DBUILD_MODULE_ModelingAlgorithms=ON"

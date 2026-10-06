@@ -60,7 +60,6 @@ cmake_options=(
   "-DBUILD_CPP_STANDARD=C++17"
   "-DBUILD_USE_VCPKG=OFF"
   "-DBUILD_USE_PCH=OFF"
-  "-DBUILD_Inspector=OFF"
   "-DBUILD_SOVERSION_NUMBERS=2"
   "-DBUILD_MODULE_FoundationClasses=ON"
   "-DBUILD_MODULE_ModelingData=ON"
