@@ -31,15 +31,15 @@ source revision is independently pinned to the official OCCT release commit.
 This separation is intentional: release automation can be fixed without changing
 the OCCT source being packaged.
 
-## Current 8.0.1 release candidate
+## Current 8.0.1 reference
 
-The 8.0.1 release candidate uses:
+The published 8.0.1 release uses:
 
 | Item | Value |
 | --- | --- |
 | Combined release tag | `occt-sdk-8.0.1` |
 | Release branch | `OCCT-801` |
-| Workflow commit used by the release | set after producer validation |
+| Workflow commit used by the release | `07a7e05ffcd3cec81e0ed37afdf61b2e35047178` |
 | Upstream OCCT tag | `V8.0.1` |
 | Upstream OCCT source commit | `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` |
 | Windows asset | `occt-combined-release-no-pch.zip` |
@@ -50,8 +50,131 @@ The 8.0.1 release candidate uses:
 | macOS toolchain | Xcode 16.4, checksum-pinned CMake 4.4.3 |
 | Expected published files | 14 |
 
-The release tag must be created only after the Linux and macOS producer workflows
-have passed for the candidate workflow revision.
+The combined release was published on 2026-10-06. GitHub reports it as immutable,
+and the release tag resolves directly to the workflow commit above.
+
+## Porting the fork to a new upstream OCCT release
+
+Create each new release branch from the exact upstream OCCT release commit, then
+carry forward the fork-owned SDK layer. `OCCT-801` uses this layout: the official
+`V8.0.1` commit `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` is the branch base,
+followed by the fork's SDK commits. Keeping the upstream commit as the branch base
+makes source identity and the fork-specific delta easy to prove.
+
+### 1. Fetch and verify the upstream release
+
+Configure the official repository as `upstream` once. If that remote already
+exists, verify its URL before using it.
+
+```bash
+git remote -v
+git remote add upstream https://github.com/Open-Cascade-SAS/OCCT.git
+```
+
+For each release, fetch the exact release tag and resolve it immediately to a
+commit. Use the tag spelling published by the upstream GitHub Release; do not
+assume that dots and underscores are interchangeable.
+
+```bash
+previous_branch=OCCT-801
+new_branch=OCCT-XYZ
+upstream_tag=VX.Y.Z
+
+git fetch --no-tags upstream "refs/tags/$upstream_tag"
+source_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
+printf '%s\n' "$source_sha"
+
+git ls-remote --tags upstream \
+  "refs/tags/$upstream_tag" "refs/tags/$upstream_tag^{}"
+```
+
+For an annotated tag, `source_sha` must equal the peeled `^{}` commit. For a
+lightweight tag, it must equal the tag ref itself. Cross-check the same commit
+against the upstream GitHub Release before continuing.
+
+### 2. Create the release branch at that exact commit
+
+Create the new fork release branch directly from `source_sha`.
+
+```bash
+git switch --create "$new_branch" "$source_sha"
+test "$(git rev-parse HEAD)" = "$source_sha"
+```
+
+The SDK layer currently lives only in these fork-owned paths:
+
+```text
+.github/linux-occt-sdk/
+.github/macos-occt-sdk/
+.github/occt-sdk-release/
+.github/workflows/build-linux-packages.yml
+.github/workflows/build-macos-packages.yml
+.github/workflows/release-occt-sdk.yml
+```
+
+Before copying them, check whether the new upstream release has introduced any
+file at those paths:
+
+```bash
+sdk_paths=(
+  .github/linux-occt-sdk
+  .github/macos-occt-sdk
+  .github/occt-sdk-release
+  .github/workflows/build-linux-packages.yml
+  .github/workflows/build-macos-packages.yml
+  .github/workflows/release-occt-sdk.yml
+)
+
+git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
+```
+
+The expected output is empty with the current repository layout. If upstream now
+owns any of those paths, inspect and merge that path deliberately before carrying
+forward the SDK layer.
+
+Copy the final reviewed SDK state from the previous release branch:
+
+```bash
+git restore --source="$previous_branch" -- "${sdk_paths[@]}"
+```
+
+Then perform the version/source/asset updates in the checklist below. Port the
+final validated SDK state rather than replaying the full history of the previous
+release branch.
+
+### 3. Verify the port before pushing
+
+After the version-specific edits are complete, review the whole fork delta from
+the exact upstream source commit:
+
+```bash
+git diff --check
+git status --short
+git diff --name-status "$source_sha"
+```
+
+After committing the port, verify the ancestry and committed delta:
+
+```bash
+test "$(git merge-base "$source_sha" HEAD)" = "$source_sha"
+git log --merges --oneline "$source_sha"..HEAD
+git diff --name-status "$source_sha"..HEAD
+```
+
+The merge log should be empty for the normal release-port path. The diff should
+contain the SDK paths above plus only deliberate, reviewed compatibility changes
+needed by the new OCCT release. Keep any required OCCT source patch as a separate,
+clearly named fork commit so it remains visible in this review.
+
+Push the new release branch only after these checks and the version update
+checklist are complete:
+
+```bash
+git push -u origin "$new_branch"
+```
+
+This branch becomes the input for the producer validation and combined release
+steps below.
 
 ## Preparing a future version
 
