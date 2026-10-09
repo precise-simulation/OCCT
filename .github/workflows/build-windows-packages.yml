@@ -1,4 +1,5 @@
 name: Build Windows OCCT SDK packages
+# Remote-only build/release pipeline; do not replace these CI build steps with local builds.
 
 on:
   workflow_call:
