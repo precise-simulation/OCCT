@@ -339,8 +339,7 @@ jobs:
           $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
           $imports = (& $dumpbin /dependents $exe 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0) { throw 'dumpbin /dependents failed for final static consumer.' }
-          if ($imports -match '(?im)^\s*TK[A-Za-z0-9_]*\.dll\s*
-) {
+          if ($imports -match '(?im)^\s*TK[A-Za-z0-9_]*\.dll\s*$') {
             throw "Final static consumer unexpectedly imports OCCT DLLs."
           }
 
