@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - OCCT-801
+      - occt-801-windows-static-sdk
 
 permissions:
   contents: read
