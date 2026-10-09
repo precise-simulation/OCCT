@@ -219,6 +219,8 @@ jobs:
           @'
           cmake_minimum_required(VERSION 3.20)
           project(occt_static_smoke LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
           find_package(OpenCASCADE CONFIG REQUIRED)
           add_executable(occt_static_smoke main.cpp)
           target_include_directories(occt_static_smoke PRIVATE ${OpenCASCADE_INCLUDE_DIR})
@@ -229,10 +231,15 @@ jobs:
           '@ | Set-Content (Join-Path $consumer 'CMakeLists.txt')
           @'
           #include <BRepPrimAPI_MakeBox.hxx>
+          #include <STEPControl_Writer.hxx>
+          #include <IFSelect_ReturnStatus.hxx>
           int main()
           {
             const TopoDS_Shape aShape = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
-            return aShape.IsNull() ? 1 : 0;
+            if (aShape.IsNull()) return 1;
+            STEPControl_Writer aWriter;
+            if (aWriter.Transfer(aShape, STEPControl_AsIs) != IFSelect_RetDone) return 2;
+            return aWriter.Write("static-smoke.step") == IFSelect_RetDone ? 0 : 3;
           }
           '@ | Set-Content (Join-Path $consumer 'main.cpp')
 
@@ -241,8 +248,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer configure failed.' }
           & cmake --build $consumerBuild --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer build failed.' }
-          & (Join-Path $consumerBuild 'Release/occt_static_smoke.exe')
-          if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer run failed.' }
+          Push-Location $consumer
+          try {
+            & (Join-Path $consumerBuild 'Release/occt_static_smoke.exe')
+            if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer run failed.' }
+            if (-not (Test-Path -LiteralPath (Join-Path $consumer 'static-smoke.step'))) {
+              throw 'Static SDK consumer did not produce static-smoke.step.'
+            }
+          } finally {
+            Pop-Location
+          }
 
       - name: Package lean static Windows SDK
         shell: pwsh
