@@ -80,6 +80,10 @@ previous_branch=OCCT-801
 new_branch=OCCT-XYZ
 upstream_tag=VX.Y.Z
 
+git fetch --no-tags origin "refs/heads/$previous_branch"
+previous_sdk_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
+printf 'previous SDK commit: %s\n' "$previous_sdk_sha"
+
 git fetch --no-tags upstream "refs/tags/$upstream_tag"
 source_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
 printf '%s\n' "$source_sha"
@@ -88,8 +92,10 @@ git ls-remote --tags upstream \
   "refs/tags/$upstream_tag" "refs/tags/$upstream_tag^{}"
 ```
 
-For an annotated tag, `source_sha` must equal the peeled `^{}` commit. For a
-lightweight tag, it must equal the tag ref itself. Cross-check the same commit
+The first fetch pins the previous fork SDK state to the current remote branch
+head, so a stale local branch cannot silently supply old helpers. For an
+annotated upstream tag, `source_sha` must equal the peeled `^{}` commit. For
+a lightweight tag, it must equal the tag ref itself. Cross-check the same commit
 against the upstream GitHub Release before continuing.
 
 ### 2. Create the release branch at that exact commit
@@ -129,14 +135,32 @@ git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
 ```
 
 The expected output is empty with the current repository layout. If upstream now
-owns any of those paths, inspect and merge that path deliberately before carrying
-forward the SDK layer.
+owns any of those paths, remove each colliding path from `sdk_paths` before the
+restore below. Carry the non-colliding paths forward with the restore, then merge
+each colliding path separately so the new upstream content remains part of the
+result.
 
-Copy the final reviewed SDK state from the previous release branch:
+Copy the pinned SDK state from the previous release branch:
 
 ```bash
-git restore --source="$previous_branch" -- "${sdk_paths[@]}"
+git restore --source="$previous_sdk_sha" -- "${sdk_paths[@]}"
 ```
+
+Before changing version fields, audit the copied OCCT-specific CMake options
+against the new upstream release. List the options passed by both producers:
+
+```bash
+rg -n -- '-D(BUILD|USE|INSTALL|3RDPARTY)_[A-Za-z0-9_]*=' \
+  .github/linux-occt-sdk/build-sdk.sh \
+  .github/macos-occt-sdk/build-sdk.sh
+```
+
+Verify each option against the new upstream `CMakeLists.txt` and `adm/cmake`
+implementation, and review the first producer configure output for unused
+variables. Treat a CMake warning that a manually specified OCCT variable was not
+used as a porting failure until the copied option is removed or replaced. The
+8.0.1 port required removing the obsolete `BUILD_MODULE_DETools` and
+`BUILD_Inspector` options, so this audit is part of every release port.
 
 Then perform the version/source/asset updates in the checklist below. Port the
 final validated SDK state rather than replaying the full history of the previous
@@ -144,13 +168,16 @@ release branch.
 
 ### 3. Verify the port before pushing
 
-After the version-specific edits are complete, review the whole fork delta from
-the exact upstream source commit:
+After the version-specific edits are complete, stage the intended SDK paths so
+new files absent from the upstream index are included in the review. Stage any
+deliberate compatibility files outside these paths explicitly as well.
 
 ```bash
-git diff --check
 git status --short
-git diff --name-status "$source_sha"
+git add -- "${sdk_paths[@]}"
+git diff --cached --check
+git diff --cached --name-status "$source_sha"
+git diff --cached "$source_sha"
 ```
 
 After committing the port, verify the ancestry and committed delta:
