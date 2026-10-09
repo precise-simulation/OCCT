@@ -14,6 +14,8 @@ on:
     branches:
       - OCCT-801
       - occt-801-windows-static-sdk
+    tags:
+      - occt-windows-sdk-8.0.1-r1
 
 permissions:
   contents: read
@@ -59,8 +61,22 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H "X-GitHub-Api-Version: $api_version" \
             https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/ref/tags/V8.0.1)"
-          test "$(jq -r '.object.type' <<<"$upstream_ref")" = "commit"
-          test "$(jq -r '.object.sha' <<<"$upstream_ref")" = "$OCCT_SOURCE_SHA"
+          object_type="$(jq -r '.object.type' <<<"$upstream_ref")"
+          object_sha="$(jq -r '.object.sha' <<<"$upstream_ref")"
+          for _ in 1 2 3 4 5; do
+            if [[ "$object_type" == "commit" ]]; then
+              break
+            fi
+            test "$object_type" = "tag"
+            tag_json="$(curl --fail --silent --show-error --location \
+              -H 'Accept: application/vnd.github+json' \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/tags/$object_sha")"
+            object_type="$(jq -r '.object.type' <<<"$tag_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+          done
+          test "$object_type" = "commit"
+          test "$object_sha" = "$OCCT_SOURCE_SHA"
 
           curl --fail --location --retry 3 --retry-all-errors \
             "$upstream_url" \
@@ -301,3 +317,199 @@ jobs:
           path: ${{ runner.temp }}/windows-static-sdk/*
           if-no-files-found: error
           retention-days: 3
+
+
+  publish:
+    name: Publish supplemental Windows SDK release
+    if: github.event_name == 'push' && github.ref == 'refs/tags/occt-windows-sdk-8.0.1-r1'
+    needs:
+      - shared
+      - static
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WORKFLOW_SHA: ${{ github.sha }}
+      RELEASE_TAG: occt-windows-sdk-8.0.1-r1
+      STATIC_ASSET: opencascade-8.0.1-windows-x86_64-vc143-static-lean-b8f597c67781.zip
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout exact release workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      # actions/download-artifact v4.3.0
+      - name: Download official shared Windows SDK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-windows-sdk-shared-official
+          path: ${{ runner.temp }}/release-assets/shared
+
+      - name: Download lean static Windows SDK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-windows-sdk-static-lean
+          path: ${{ runner.temp }}/release-assets/static
+
+      - name: Verify tag, checksums and exact four-asset inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
+          bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
+
+          root="$RUNNER_TEMP/release-assets"
+          shared="$root/shared/$WINDOWS_SHARED_ASSET"
+          shared_sum="$shared.sha256"
+          static="$root/static/$STATIC_ASSET"
+          static_sum="$static.sha256"
+
+          mapfile -t files < <(find "$root" -type f -print | sort)
+          test "${#files[@]}" -eq 4
+
+          mapfile -t names < <(for file in "${files[@]}"; do basename "$file"; done | sort)
+          expected=(
+            "$STATIC_ASSET"
+            "$STATIC_ASSET.sha256"
+            "$WINDOWS_SHARED_ASSET"
+            "$WINDOWS_SHARED_ASSET.sha256"
+          )
+          for i in 0 1 2 3; do
+            test "${names[$i]}" = "${expected[$i]}"
+          done
+
+          test "$(wc -c < "$shared" | tr -d ' ')" = "$WINDOWS_SHARED_ASSET_SIZE"
+          shared_actual="$(sha256sum "$shared" | awk '{print $1}')"
+          test "$shared_actual" = "$WINDOWS_SHARED_SHA256"
+          read -r shared_recorded shared_name < <(tr -d '\r' < "$shared_sum")
+          test "$shared_recorded" = "$WINDOWS_SHARED_SHA256"
+          test "$shared_name" = "$WINDOWS_SHARED_ASSET"
+
+          static_actual="$(sha256sum "$static" | awk '{print $1}')"
+          read -r static_recorded static_name < <(tr -d '\r' < "$static_sum")
+          test "$static_recorded" = "$static_actual"
+          test "$static_name" = "$STATIC_ASSET"
+
+      - name: Create, verify and publish supplemental release
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_version="2026-03-10"
+          published=0
+          draft_id=""
+          create_attempted=0
+          run_marker="occt-windows-sdk-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+
+          find_draft_id() {
+            gh api --paginate \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs --arg tag "$RELEASE_TAG" '
+                [ .[][] | select(.tag_name == $tag and .draft == true) ] |
+                if length == 1 then .[0].id
+                elif length == 0 then empty
+                else error("multiple draft releases found for tag")
+                end
+              '
+          }
+
+          find_our_draft_id() {
+            gh api --paginate \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs --arg tag "$RELEASE_TAG" --arg marker "$run_marker" '
+                [ .[][] |
+                  select(.tag_name == $tag and .draft == true) |
+                  select((.body // "") | contains($marker))
+                ] |
+                if length == 1 then .[0].id
+                elif length == 0 then empty
+                else error("multiple workflow-owned draft releases found for tag")
+                end
+              '
+          }
+
+          cleanup_draft() {
+            status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 && "$published" -eq 0 && "$create_attempted" -eq 1 ]]; then
+              if [[ -z "$draft_id" ]]; then
+                draft_id="$(find_our_draft_id 2>/dev/null || true)"
+              fi
+              if [[ -n "$draft_id" ]]; then
+                gh api -X DELETE \
+                  -H "X-GitHub-Api-Version: $api_version" \
+                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_draft EXIT
+
+          existing_draft_id="$(find_draft_id)"
+          if [[ -n "$existing_draft_id" ]] || gh api \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release already exists for $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          bash .github/linux-occt-sdk/verify-tag.sh "$RELEASE_TAG" "$WORKFLOW_SHA"
+
+          root="$RUNNER_TEMP/release-assets"
+          mapfile -t assets < <(find "$root" -type f -print | sort)
+          test "${#assets[@]}" -eq 4
+
+          notes="OCCT $OCCT_VERSION supplemental Windows SDK release."
+          notes="$notes"$'\n\n'"Shared: official Open-Cascade-SAS V8.0.1 combined Release/no-PCH package, copied byte-for-byte and verified against upstream SHA-256 $WINDOWS_SHARED_SHA256."
+          notes="$notes"$'\n'"Static: lean x86_64 VC143 SDK built from exact OCCT source $OCCT_SOURCE_SHA with 28 OCCT toolkits and optional third-party dependencies disabled."
+          notes="$notes"$'\n'"Static relocation/consumer validation uses C++17, OCCT_STATIC_BUILD, OCCT_NO_PLUGINS, and writes a STEP file."
+          notes="$notes"$'\n\n'"Workflow revision: $WORKFLOW_SHA"
+          notes="$notes"$'\n\n'"<!-- $run_marker -->"
+
+          create_attempted=1
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "OCCT $OCCT_VERSION Windows SDKs" \
+            --notes "$notes"
+
+          draft_id="$(find_our_draft_id)"
+          test -n "$draft_id"
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          test "$(jq -r '.draft' <<<"$release_json")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 4
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
+
+          bash .github/linux-occt-sdk/verify-tag.sh "$RELEASE_TAG" "$WORKFLOW_SHA"
+          gh api -X PATCH \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
+            -F draft=false >/dev/null
+          published=1
+
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          test "$(jq -r '.draft' <<<"$release_json")" = "false"
+          test "$(jq -r '.immutable' <<<"$release_json")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 4
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
+          bash .github/linux-occt-sdk/verify-tag.sh "$RELEASE_TAG" "$WORKFLOW_SHA"
+          trap - EXIT
