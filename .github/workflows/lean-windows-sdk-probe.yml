@@ -182,7 +182,12 @@ jobs:
           if ($dlls.Count -ne 0) { throw "Static install unexpectedly contains DLLs: $($dlls.Name -join ',')" }
           if ($staticLibs.Count -ne 28) { throw "Expected 28 static OCCT libraries, got $($staticLibs.Count)." }
 
-          $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found: $vswhere" }
+          $dumpbin = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1).Trim()
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) {
+            throw 'dumpbin.exe was not found in the Visual Studio installation.'
+          }
           $dynamicCrtEvidence = 0
           foreach ($lib in $staticLibs) {
             $directives = (& $dumpbin /directives $lib.FullName 2>&1 | Out-String)
@@ -336,7 +341,12 @@ jobs:
             Pop-Location
           }
 
-          $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found: $vswhere" }
+          $dumpbin = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1).Trim()
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) {
+            throw 'dumpbin.exe was not found in the Visual Studio installation.'
+          }
           $imports = (& $dumpbin /dependents $exe 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0) { throw 'dumpbin /dependents failed for final static consumer.' }
           if ($imports -match '(?im)^\s*TK[A-Za-z0-9_]*\.dll\s*$') {
