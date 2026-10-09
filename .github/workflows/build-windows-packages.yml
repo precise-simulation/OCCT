@@ -1,0 +1,287 @@
+name: Build Windows OCCT SDK packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-801
+    paths:
+      - .github/workflows/build-windows-packages.yml
+      - .github/workflows/release-occt-sdk.yml
+      - .github/occt-sdk-release/**
+  push:
+    branches:
+      - OCCT-801
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-occt-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  OCCT_VERSION: '8.0.1'
+  OCCT_SOURCE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
+  WINDOWS_SHARED_ASSET: occt-combined-release-no-pch.zip
+  WINDOWS_SHARED_ASSET_SIZE: '257767212'
+  WINDOWS_SHARED_SHA256: afe36b6abcc7964d0f8b0404ccb16e7c1f6ddd8e43b450c865f7e7f092440e9d
+  WINDOWS_SHARED_URL: https://github.com/Open-Cascade-SAS/OCCT/releases/download/V8.0.1/occt-combined-release-no-pch.zip
+
+jobs:
+  shared:
+    name: Copy official shared Windows SDK
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and verify official OCCT Windows package
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/windows-shared-sdk"
+          mkdir -p "$out"
+
+          api_version="2022-11-28"
+          upstream_release="$(curl --fail --silent --show-error --location \
+            -H 'Accept: application/vnd.github+json' \
+            -H "X-GitHub-Api-Version: $api_version" \
+            https://api.github.com/repos/Open-Cascade-SAS/OCCT/releases/tags/V8.0.1)"
+          upstream_asset="$(jq -c --arg name "$WINDOWS_SHARED_ASSET" \
+            '.assets[] | select(.name == $name)' <<<"$upstream_release")"
+          test -n "$upstream_asset"
+          test "$(jq -r '.size' <<<"$upstream_asset")" = "$WINDOWS_SHARED_ASSET_SIZE"
+          test "$(jq -r '.digest' <<<"$upstream_asset")" = "sha256:$WINDOWS_SHARED_SHA256"
+          upstream_url="$(jq -r '.browser_download_url' <<<"$upstream_asset")"
+          test "$upstream_url" = "$WINDOWS_SHARED_URL"
+
+          upstream_ref="$(curl --fail --silent --show-error --location \
+            -H 'Accept: application/vnd.github+json' \
+            -H "X-GitHub-Api-Version: $api_version" \
+            https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/ref/tags/V8.0.1)"
+          test "$(jq -r '.object.type' <<<"$upstream_ref")" = "commit"
+          test "$(jq -r '.object.sha' <<<"$upstream_ref")" = "$OCCT_SOURCE_SHA"
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            "$upstream_url" \
+            --output "$out/$WINDOWS_SHARED_ASSET"
+          test "$(wc -c < "$out/$WINDOWS_SHARED_ASSET" | tr -d ' ')" = "$WINDOWS_SHARED_ASSET_SIZE"
+          actual="$(sha256sum "$out/$WINDOWS_SHARED_ASSET" | awk '{print $1}')"
+          test "$actual" = "$WINDOWS_SHARED_SHA256"
+          printf '%s  %s\n' "$WINDOWS_SHARED_SHA256" "$WINDOWS_SHARED_ASSET" \
+            > "$out/$WINDOWS_SHARED_ASSET.sha256"
+          (cd "$out" && sha256sum -c "$WINDOWS_SHARED_ASSET.sha256")
+
+      # actions/upload-artifact v4.6.2
+      - name: Upload official shared Windows SDK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-windows-sdk-shared-official
+          path: ${{ runner.temp }}/windows-shared-sdk/*
+          if-no-files-found: error
+          retention-days: 3
+
+  static:
+    name: Build lean static Windows SDK
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact OCCT source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.OCCT_SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+
+      - name: Verify source identity and version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git -C source rev-parse HEAD).Trim()
+          if ($actual -ne $env:OCCT_SOURCE_SHA) {
+            throw "OCCT checkout mismatch: $actual"
+          }
+          $versionFile = 'source/adm/cmake/version.cmake'
+          $versionText = Get-Content $versionFile -Raw
+          $major = [regex]::Match($versionText, 'set \(OCC_VERSION_MAJOR +([0-9]+) *\)').Groups[1].Value
+          $minor = [regex]::Match($versionText, 'set \(OCC_VERSION_MINOR +([0-9]+) *\)').Groups[1].Value
+          $patch = [regex]::Match($versionText, 'set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)').Groups[1].Value
+          $version = "$major.$minor.$patch"
+          if ($version -ne $env:OCCT_VERSION) {
+            throw "OCCT version mismatch: $version"
+          }
+
+      - name: Configure lean static OCCT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = Join-Path $env:RUNNER_TEMP 'occt-build-static-lean'
+          $install = Join-Path $env:RUNNER_TEMP 'occt-install-static-lean'
+          $toolkits = 'TKDESTEP;TKDEIGES;TKDESTL;TKOffset;TKMesh'
+          $configure = @(
+            '-S', (Join-Path $env:GITHUB_WORKSPACE 'source'),
+            '-B', $build,
+            '-G', 'Visual Studio 17 2022',
+            '-A', 'x64',
+            '-DBUILD_LIBRARY_TYPE=Static',
+            '-DBUILD_OPT_PROFILE=Default',
+            '-DBUILD_USE_PCH=OFF',
+            '-DBUILD_MODULE_Draw=OFF',
+            '-DBUILD_MODULE_FoundationClasses=OFF',
+            '-DBUILD_MODULE_ModelingData=OFF',
+            '-DBUILD_MODULE_ModelingAlgorithms=OFF',
+            '-DBUILD_MODULE_ApplicationFramework=OFF',
+            '-DBUILD_MODULE_DataExchange=OFF',
+            '-DBUILD_MODULE_Visualization=OFF',
+            "-DBUILD_ADDITIONAL_TOOLKITS=$toolkits",
+            '-DUSE_FREETYPE=OFF',
+            '-DUSE_FREEIMAGE=OFF',
+            '-DUSE_FFMPEG=OFF',
+            '-DUSE_OPENVR=OFF',
+            '-DUSE_RAPIDJSON=OFF',
+            '-DUSE_DRACO=OFF',
+            '-DUSE_TBB=OFF',
+            '-DUSE_EIGEN=OFF',
+            '-DUSE_TCL=OFF',
+            '-DUSE_TK=OFF',
+            '-DUSE_VTK=OFF',
+            '-DUSE_OPENGL=OFF',
+            '-DUSE_GLES2=OFF',
+            '-DUSE_D3D=OFF',
+            '-DUSE_MMGR_TYPE=NATIVE',
+            '-D3RDPARTY_DIR=',
+            "-DINSTALL_DIR=$install"
+          )
+          & cmake @configure
+          if ($LASTEXITCODE -ne 0) { throw 'OCCT configure failed.' }
+
+          $cache = Get-Content (Join-Path $build 'CMakeCache.txt') -Raw
+          foreach ($required in @(
+            'BUILD_LIBRARY_TYPE:STRING=Static',
+            'USE_FREETYPE:BOOL=OFF',
+            'USE_FREEIMAGE:BOOL=OFF',
+            'USE_FFMPEG:BOOL=OFF',
+            'USE_OPENVR:BOOL=OFF',
+            'USE_TBB:BOOL=OFF',
+            'BUILD_MODULE_Visualization:BOOL=OFF',
+            'USE_MMGR_TYPE:STRING=NATIVE'
+          )) {
+            if (-not $cache.Contains($required)) {
+              throw "Expected CMake cache entry missing: $required"
+            }
+          }
+          "OCCT_BUILD=$build" >> $env:GITHUB_ENV
+          "OCCT_ROOT=$install" >> $env:GITHUB_ENV
+
+      - name: Build and install lean static OCCT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build $env:OCCT_BUILD --target install --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'OCCT build/install failed.' }
+
+      - name: Verify static toolkit closure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $config = Join-Path $env:OCCT_ROOT 'cmake/OpenCASCADEConfig.cmake'
+          if (-not (Test-Path -LiteralPath $config)) {
+            throw "Missing OpenCASCADEConfig.cmake: $config"
+          }
+          $match = Select-String -Path $config -Pattern '^set \(OpenCASCADE_LIBRARIES (.*)\)$' | Select-Object -First 1
+          if (-not $match) { throw 'OpenCASCADE_LIBRARIES was not found.' }
+          $libs = @($match.Matches[0].Groups[1].Value -split ';')
+          if ($libs.Count -ne 28) {
+            throw "Expected 28-toolkit closure, got $($libs.Count): $($libs -join ',')"
+          }
+          if ($libs -contains 'TKDECascade') {
+            throw 'Unexpected TKDECascade in lean toolkit closure.'
+          }
+          $dlls = @(Get-ChildItem $env:OCCT_ROOT -File -Recurse -Filter '*.dll')
+          $staticLibs = @(Get-ChildItem $env:OCCT_ROOT -File -Recurse -Filter '*.lib')
+          if ($dlls.Count -ne 0) {
+            throw "Static install unexpectedly contains DLLs: $($dlls.Name -join ',')"
+          }
+          if ($staticLibs.Count -ne 28) {
+            throw "Expected 28 static OCCT libraries, got $($staticLibs.Count)."
+          }
+          "OCCT_TOOLKITS=$($libs -join ',')" >> $env:GITHUB_ENV
+
+      - name: Relocate and consume static SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $relocated = Join-Path $env:RUNNER_TEMP 'relocated-static-sdk'
+          Copy-Item -LiteralPath $env:OCCT_ROOT -Destination $relocated -Recurse
+
+          $consumer = Join-Path $env:RUNNER_TEMP 'static-consumer'
+          New-Item -ItemType Directory -Force -Path $consumer | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.20)
+          project(occt_static_smoke LANGUAGES CXX)
+          find_package(OpenCASCADE CONFIG REQUIRED)
+          add_executable(occt_static_smoke main.cpp)
+          target_include_directories(occt_static_smoke PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+          target_link_directories(occt_static_smoke PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+          target_compile_definitions(occt_static_smoke PRIVATE OCCT_STATIC_BUILD OCCT_NO_PLUGINS)
+          target_link_libraries(occt_static_smoke PRIVATE ${OpenCASCADE_LIBRARIES}
+            advapi32 gdi32 user32 wsock32 psapi windowscodecs winmm)
+          '@ | Set-Content (Join-Path $consumer 'CMakeLists.txt')
+          @'
+          #include <BRepPrimAPI_MakeBox.hxx>
+          int main()
+          {
+            const TopoDS_Shape aShape = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
+            return aShape.IsNull() ? 1 : 0;
+          }
+          '@ | Set-Content (Join-Path $consumer 'main.cpp')
+
+          $consumerBuild = Join-Path $env:RUNNER_TEMP 'static-consumer-build'
+          & cmake -S $consumer -B $consumerBuild -G 'Visual Studio 17 2022' -A x64 "-DOpenCASCADE_DIR=$(Join-Path $relocated 'cmake')"
+          if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer configure failed.' }
+          & cmake --build $consumerBuild --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer build failed.' }
+          & (Join-Path $consumerBuild 'Release/occt_static_smoke.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer run failed.' }
+
+      - name: Package lean static Windows SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha12 = $env:OCCT_SOURCE_SHA.Substring(0, 12)
+          $baseName = "opencascade-$env:OCCT_VERSION-windows-x86_64-vc143-static-lean-$sha12"
+          $stage = Join-Path $env:RUNNER_TEMP $baseName
+          Copy-Item -LiteralPath $env:OCCT_ROOT -Destination $stage -Recurse
+          Copy-Item -LiteralPath 'source/LICENSE_LGPL_21.txt' -Destination $stage
+          Copy-Item -LiteralPath 'source/OCCT_LGPL_EXCEPTION.txt' -Destination $stage
+          @(
+            "package=$baseName",
+            "occt-version=$env:OCCT_VERSION",
+            "occt-source-sha=$env:OCCT_SOURCE_SHA",
+            "workflow-sha=$env:GITHUB_SHA",
+            'platform=windows-x86_64',
+            'msvc-toolset=vc143',
+            'linkage=static',
+            'profile=lean',
+            'optional-third-party=none',
+            'toolkit-count=28',
+            "toolkits=$env:OCCT_TOOLKITS",
+            'consumer-definitions=OCCT_STATIC_BUILD;OCCT_NO_PLUGINS',
+            'consumer-system-libs=advapi32;gdi32;user32;wsock32;psapi;windowscodecs;winmm'
+          ) | Set-Content (Join-Path $stage 'sdk-manifest.txt')
+
+          $out = Join-Path $env:RUNNER_TEMP 'windows-static-sdk'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $archive = Join-Path $out "$baseName.zip"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          "$hash  $baseName.zip" | Set-Content (Join-Path $out "$baseName.zip.sha256")
+          Get-ChildItem $out | Select-Object Name,Length
+
+      # actions/upload-artifact v4.6.2
+      - name: Upload lean static Windows SDK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-windows-sdk-static-lean
+          path: ${{ runner.temp }}/windows-static-sdk/*
+          if-no-files-found: error
+          retention-days: 3
