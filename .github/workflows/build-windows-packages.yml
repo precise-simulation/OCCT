@@ -6,8 +6,8 @@ on:
   push:
     branches:
       - OCCT-801
-      - occt-801-lean-sdk-probe
-      - occt-801-windows-release-probe
+    paths:
+      - .github/workflows/build-windows-packages.yml
 
 permissions:
   contents: read

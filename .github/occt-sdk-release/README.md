@@ -14,7 +14,13 @@ source tag have been verified.
 
 ## Release architecture
 
-The release is driven by `.github/workflows/release-occt-sdk.yml`.
+The completed release workflow is retained as
+`.github/occt-sdk-release/release-template.yml`. It is intentionally outside
+`.github/workflows/` after publication so an immutable, version-specific
+release workflow does not remain registered as an active workflow. For a future
+release, copy the template to `.github/workflows/release-occt-sdk.yml`, update
+the release-specific values, validate it, and remove/archive it again after the
+release is immutable.
 
 - Linux uses `.github/workflows/build-linux-packages.yml` and produces native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
@@ -125,8 +131,7 @@ The SDK layer currently lives only in these fork-owned paths:
 .github/occt-sdk-release/
 .github/workflows/build-linux-packages.yml
 .github/workflows/build-macos-packages.yml
-.github/workflows/lean-windows-sdk-probe.yml
-.github/workflows/release-occt-sdk.yml
+.github/workflows/build-windows-packages.yml
 ```
 
 Before copying them, check whether the new upstream release has introduced any
@@ -139,8 +144,7 @@ sdk_paths=(
   .github/occt-sdk-release
   .github/workflows/build-linux-packages.yml
   .github/workflows/build-macos-packages.yml
-  .github/workflows/lean-windows-sdk-probe.yml
-  .github/workflows/release-occt-sdk.yml
+  .github/workflows/build-windows-packages.yml
 )
 
 git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
@@ -165,7 +169,7 @@ against the new upstream release. List the options passed by both producers:
 rg -n -- '-D(BUILD|USE|INSTALL|3RDPARTY)_[A-Za-z0-9_]*=' \
   .github/linux-occt-sdk/build-sdk.sh \
   .github/macos-occt-sdk/build-sdk.sh \
-  .github/workflows/lean-windows-sdk-probe.yml
+  .github/workflows/build-windows-packages.yml
 ```
 
 Verify each option against the new upstream `CMakeLists.txt` and `adm/cmake`
@@ -272,7 +276,7 @@ In `.github/workflows/build-macos-packages.yml`:
 - review the macOS runner labels, Xcode pin, CMake pin, and deployment target.
   Change them only deliberately and validate both architectures after doing so.
 
-In `.github/workflows/lean-windows-sdk-probe.yml`:
+In `.github/workflows/build-windows-packages.yml`:
 
 - change the push branch to the new release branch;
 - change `OCCT_VERSION` and `OCCT_SOURCE_SHA`;
@@ -303,7 +307,9 @@ manifest validation.
 
 ### Combined release workflow
 
-In `.github/workflows/release-occt-sdk.yml`, update:
+Copy `.github/occt-sdk-release/release-template.yml` to
+`.github/workflows/release-occt-sdk.yml` for the release being prepared, then
+update:
 
 - the exact tag trigger. Use `occt-sdk-X.Y.Z` for a normal new release; use a
   suffix such as `-r2` when replacing an already-published immutable release;
@@ -330,7 +336,7 @@ rg -n '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
   .github/occt-sdk-release \
   .github/workflows/build-linux-packages.yml \
   .github/workflows/build-macos-packages.yml \
-  .github/workflows/lean-windows-sdk-probe.yml \
+  .github/workflows/build-windows-packages.yml \
   .github/workflows/release-occt-sdk.yml
 ```
 
@@ -360,14 +366,16 @@ At minimum:
    original runner workspace, build tree, Xcode path, or SDK path.
 8. Verify the Windows upstream shared-asset metadata before tagging.
 
-The combined workflow can also be started with `workflow_dispatch` as an
-end-to-end preflight. Its publish job is deliberately gated to a tag push, so a
-manual run builds/verifies the inputs without publishing a release.
+While the combined workflow is installed under `.github/workflows/`, it can
+also be started with `workflow_dispatch` as an end-to-end preflight. Its publish
+job is deliberately gated to a tag push, so a manual run builds/verifies the
+inputs without publishing a release.
 
-Ordinary pushes to the configured release branch start the Linux, macOS, and
-Windows producer workflows. A documentation-only commit can use `[skip ci]`;
-never use a skip marker for changes that affect release workflows, helpers,
-source pins, or package contents.
+Ordinary pushes to the configured release branch start a producer only when that
+producer's workflow or helper paths change. Documentation-only commits and
+unrelated branch changes therefore do not launch SDK builds. Never use a skip
+marker for changes that affect release workflows, helpers, source pins, or
+package contents when a qualification run is required.
 
 ## Creating the combined release
 
@@ -376,19 +384,26 @@ workflow and helper implementation. Use a **lightweight tag**. The release
 workflow verifies that the GitHub tag resolves directly to the workflow event
 commit; the known-good 7.9.3 release also used a lightweight tag.
 
-For the current shared/static replacement:
+For a future release, first switch to the intended release branch, install the
+reviewed template as the active release workflow, commit that exact state, and
+then create the lightweight release tag:
 
 ```bash
-git switch OCCT-801
-git pull --ff-only origin OCCT-801
+git switch OCCT-XYZ
+git pull --ff-only origin OCCT-XYZ
+
+cp .github/occt-sdk-release/release-template.yml \
+  .github/workflows/release-occt-sdk.yml
+# edit release-specific values, review, and commit the active workflow
+
 git rev-parse HEAD
 
-git tag occt-sdk-8.0.1-r2 HEAD
-git push origin refs/tags/occt-sdk-8.0.1-r2
+git tag occt-sdk-X.Y.Z HEAD
+git push origin refs/tags/occt-sdk-X.Y.Z
 ```
 
-Pushing the exact configured tag starts `.github/workflows/release-occt-sdk.yml`.
-The workflow then:
+Pushing the exact configured tag starts
+`.github/workflows/release-occt-sdk.yml`. The workflow then:
 
 1. builds and qualifies the Linux SDKs;
 2. builds and qualifies the four macOS SDKs;
@@ -402,6 +417,9 @@ The workflow then:
 
 Do not move or recreate the release tag while an earlier run for that tag is
 still active. Tag-triggered runs intentionally do not cancel each other.
+After the published release is verified immutable, move the completed workflow
+back to `.github/occt-sdk-release/release-template.yml` (or otherwise remove
+the active one-shot workflow) and commit that cleanup.
 
 ## Expected release inventory
 

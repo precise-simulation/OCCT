@@ -7,17 +7,14 @@ on:
     branches:
       - OCCT-801
     paths:
-      - CMakeLists.txt
-      - LICENSE_LGPL_21.txt
-      - OCCT_LGPL_EXCEPTION.txt
-      - adm/**
-      - data/**
-      - src/**
       - .github/linux-occt-sdk/**
       - .github/workflows/build-linux-packages.yml
   push:
     branches:
       - OCCT-801
+    paths:
+      - .github/linux-occt-sdk/**
+      - .github/workflows/build-linux-packages.yml
 
 permissions:
   contents: read

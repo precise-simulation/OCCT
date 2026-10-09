@@ -7,14 +7,14 @@ on:
     branches:
       - OCCT-801
     paths:
-      - CMakeLists.txt
-      - adm/**
-      - src/**
       - .github/macos-occt-sdk/**
       - .github/workflows/build-macos-packages.yml
   push:
     branches:
       - OCCT-801
+    paths:
+      - .github/macos-occt-sdk/**
+      - .github/workflows/build-macos-packages.yml
 
 permissions:
   contents: read

@@ -1,3 +1,6 @@
+# Template only. Copy this file to .github/workflows/release-occt-sdk.yml,
+# update all release-specific values, and commit that active workflow before
+# preflight/tagging. Archive/remove the active copy after the release is immutable.
 name: Release OCCT SDK bundle
 
 on:
@@ -32,7 +35,7 @@ jobs:
 
   windows:
     name: Windows SDKs
-    uses: ./.github/workflows/lean-windows-sdk-probe.yml
+    uses: ./.github/workflows/build-windows-packages.yml
 
   publish:
     name: Publish combined OCCT SDK release
