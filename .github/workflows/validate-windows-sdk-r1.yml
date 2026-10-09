@@ -1,0 +1,13 @@
+name: Validate Windows OCCT SDK r1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: precise-simulation/OCCT/.github/workflows/build-windows-packages.yml@occt-801-windows-static-sdk
+    permissions:
+      contents: read
