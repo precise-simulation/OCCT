@@ -69,6 +69,52 @@ The current replacement workflow targets `occt-sdk-8.0.1-r2`. It keeps the
 same Linux, macOS, and official Windows shared inputs and adds the qualified lean
 Windows static SDK. The r2 release therefore contains 16 files.
 
+## When upstream publishes the next OCCT release
+
+Do not create a new fork release branch from upstream `master` merely because
+the development version has advanced. The SDK branches and releases in this fork
+are intended to correspond to identifiable upstream release tags.
+
+As of 2026-10-09, the latest upstream stable GitHub Release is `V8.0.1`.
+Upstream `master` identifies itself as `8.1.0-dev1`, so 8.1 is the next
+development line but is not yet a stable release to package.
+
+The normal policy is:
+
+1. Wait for a new upstream GitHub Release/tag.
+2. Prefer the final stable release for a durable SDK release.
+3. Only create a beta/RC SDK branch when there is a concrete need to qualify a
+   prerelease before the stable tag; keep such releases clearly marked as
+   prereleases.
+4. Read the GitHub Release's actual `tag_name`; do not derive the tag from its
+   display name. For example, the 8.0.1 release name is `V8_0_1` while its
+   actual tag is `V8.0.1`.
+5. Peel an annotated tag to its commit and use that exact commit as the new
+   release branch base.
+6. Create the new fork branch directly at that upstream commit, for example
+   `OCCT-802` or `OCCT-810`.
+7. Restore the fork-owned SDK automation from the previous release branch, then
+   update and requalify it rather than replaying the old development history.
+
+Useful release-state checks are:
+
+```bash
+gh api repos/Open-Cascade-SAS/OCCT/releases/latest \
+  --jq '{tag_name, name, published_at, assets: [.assets[] | {name, size, digest}]}'
+
+git ls-remote --tags https://github.com/Open-Cascade-SAS/OCCT.git \
+  'refs/tags/V8*'
+
+gh api repos/Open-Cascade-SAS/OCCT/contents/adm/cmake/version.cmake?ref=master \
+  --jq '.content' |
+  base64 --decode
+```
+
+Once a new release exists, follow the porting procedure below. In particular,
+re-audit all copied CMake variables and the Windows static toolkit closure against
+the new source. Do not assume that the 8.0.1 option names, toolkit dependencies,
+system-library requirements, or upstream Windows asset metadata remain valid.
+
 ## Porting the fork to a new upstream OCCT release
 
 Create each new release branch from the exact upstream OCCT release commit, then
@@ -452,6 +498,195 @@ Its manifest records the consumer compile definitions
 `OCCT_STATIC_BUILD;OCCT_NO_PLUGINS` and the Windows system libraries required
 by the lean toolkit closure. The validation workflow uses those settings for an
 external CMake consumer before and after packaging.
+
+## Windows static SDK implementation
+
+Linux and macOS already publish both shared and static SDK variants. The specific
+addition made for `occt-sdk-8.0.1-r2` was the Windows static SDK described in
+this section; the official upstream Windows ZIP remains the shared Windows SDK.
+
+The Windows static package in `occt-sdk-8.0.1-r2` is intentionally not a
+static rebuild of every optional OCCT component. It is a **lean static SDK**
+containing the OCCT toolkit closure needed for the geometry and data-exchange
+use cases qualified by this repository.
+
+### Build configuration
+
+The Windows static producer uses:
+
+- upstream OCCT source commit
+  `b8f597c677811d1f9f4d8a97f5ae2825c0353a42`, the same source revision used
+  by Linux/macOS and corresponding to upstream `V8.0.1`;
+- `windows-2022`, Visual Studio 2022, x64, Release configuration;
+- `BUILD_LIBRARY_TYPE:STRING=Static`;
+- `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`, i.e. OCCT itself is linked
+  statically but uses the dynamic MSVC runtime (`/MD`), not the static CRT
+  (`/MT`);
+- `BUILD_OPT_PROFILE=Default`;
+- precompiled headers disabled;
+- OCCT's native memory manager.
+
+The broad OCCT modules are disabled and the producer explicitly requests these
+top-level toolkits:
+
+```text
+TKDESTEP
+TKDEIGES
+TKDESTL
+TKOffset
+TKMesh
+```
+
+OCCT then resolves their transitive toolkit dependencies. The successful
+8.0.1 qualification produced this exact 28-toolkit closure:
+
+```text
+TKDESTEP
+TKDE
+TKBRep
+TKernel
+TKMath
+TKXSBase
+TKTopAlgo
+TKG2d
+TKCAF
+TKCDF
+TKLCAF
+TKG3d
+TKXCAF
+TKShHealing
+TKGeomBase
+TKGeomAlgo
+TKBO
+TKPrim
+TKService
+TKV3d
+TKVCAF
+TKMesh
+TKHLR
+TKDEIGES
+TKBool
+TKDESTL
+TKOffset
+TKFillet
+```
+
+`TKDECascade` is explicitly rejected from the lean closure.
+
+The producer disables optional third-party integrations:
+
+```text
+Freetype
+FreeImage
+FFmpeg
+OpenVR
+RapidJSON
+Draco
+TBB
+Eigen
+Tcl
+Tk
+VTK
+OpenGL
+GLES2
+D3D
+```
+
+`3RDPARTY_DIR` is left empty, and the package manifest records
+`optional-third-party=none`. This makes the Windows static SDK self-contained
+with respect to those optional OCCT integrations and prevents consumers from
+silently requiring the upstream third-party bundle.
+
+### What is actually shipped
+
+The installed static SDK must contain:
+
+- exactly 28 OCCT `.lib` files corresponding to the closure above;
+- zero OCCT `.dll` files;
+- installed headers and CMake package files;
+- OCCT's `LICENSE_LGPL_21.txt` and `OCCT_LGPL_EXCEPTION.txt`;
+- `sdk-manifest.txt`, which records source/workflow provenance, toolchain,
+  linkage, toolkit closure, and the required consumer settings;
+- an adjacent SHA-256 checksum for the final ZIP.
+
+The successful 8.0.1 qualification measured the 28 static OCCT libraries at
+`548862194` bytes (523.436 MiB). The compressed published static SDK ZIP is
+`118774584` bytes (113.272 MiB). These sizes are evidence for this release,
+not fixed requirements for future OCCT/toolchain versions.
+
+### MSVC runtime contract
+
+"Static OCCT" here means OCCT toolkit linkage is static; it does **not** mean
+that the Microsoft C/C++ runtime is statically linked.
+
+Every installed OCCT `.lib` is inspected with `dumpbin /directives`:
+
+- any `LIBCMT` default-library directive is rejected because it indicates
+  static CRT (`/MT`) linkage;
+- the validation requires evidence of `MSVCRT`, confirming the intended
+  dynamic CRT (`/MD`) contract.
+
+This avoids mixing incompatible MSVC runtime models in downstream applications.
+
+### Consumer contract
+
+For OCCT 8.0.1, the installed OCCT CMake package does not propagate everything
+needed by a static consumer. Consumers of this package must currently define:
+
+```text
+OCCT_STATIC_BUILD
+OCCT_NO_PLUGINS
+```
+
+and link these Windows system libraries in addition to
+`${OpenCASCADE_LIBRARIES}`:
+
+```text
+advapi32
+gdi32
+user32
+wsock32
+psapi
+windowscodecs
+winmm
+```
+
+Those requirements are recorded in `sdk-manifest.txt` as:
+
+```text
+consumer-definitions=OCCT_STATIC_BUILD;OCCT_NO_PLUGINS
+consumer-system-libs=advapi32;gdi32;user32;wsock32;psapi;windowscodecs;winmm
+```
+
+This is an explicit compatibility contract, not an arbitrary workaround. For a
+future OCCT release, first check whether upstream's installed CMake targets have
+started exporting the static definitions/system requirements themselves. Remove
+the explicit consumer settings only after a remote consumer qualification proves
+that they are no longer required.
+
+### Qualification performed
+
+The Windows static artifact is accepted only after all of the following pass:
+
+1. configure and install the pinned OCCT source as the lean static closure;
+2. verify exactly 28 toolkits, exactly 28 `.lib` files, no `.dll` files, and
+   no unexpected `TKDECascade`;
+3. inspect every static library's MSVC default-library directives to enforce the
+   `/MD` runtime contract;
+4. copy the installed SDK to a different directory to prove it is relocatable;
+5. configure an external CMake consumer using only the relocated install;
+6. build a small executable that creates a box with
+   `BRepPrimAPI_MakeBox` and writes it through `STEPControl_Writer`;
+7. run that executable and require the STEP file to be produced;
+8. package the SDK, manifest, licenses, and checksum into the final ZIP;
+9. extract that ZIP into another fresh location and repeat the external consumer
+   configure/build/run;
+10. inspect the final consumer executable with `dumpbin /dependents` and reject
+    any dependency matching `TK*.dll`.
+
+The successful final Windows qualification was GitHub Actions run
+`37910758624`. The final executable therefore demonstrated real static OCCT
+linkage rather than merely producing `.lib` files.
 
 Every archive has an adjacent `.sha256` file. The release workflow rejects
 missing files, extra files, checksum failures, source/version mismatches, and an
