@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - occt-sdk-8.0.1
+      - occt-sdk-8.0.1-r2
 
 permissions:
   contents: read
@@ -31,68 +31,8 @@ jobs:
     uses: ./.github/workflows/build-macos-packages.yml
 
   windows:
-    name: Copy official Windows SDK
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download and verify official OCCT Windows package
-        shell: bash
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/windows-sdk"
-          mkdir -p "$out"
-
-          api_version="2022-11-28"
-          upstream_release="$(curl --fail --silent --show-error --location \
-            -H 'Accept: application/vnd.github+json' \
-            -H "X-GitHub-Api-Version: $api_version" \
-            https://api.github.com/repos/Open-Cascade-SAS/OCCT/releases/tags/V8.0.1)"
-          upstream_asset="$(jq -c --arg name "$WINDOWS_ASSET" \
-            '.assets[] | select(.name == $name)' <<<"$upstream_release")"
-          test -n "$upstream_asset"
-          test "$(jq -r '.size' <<<"$upstream_asset")" = "$WINDOWS_ASSET_SIZE"
-          test "$(jq -r '.digest' <<<"$upstream_asset")" = "sha256:$WINDOWS_ASSET_SHA256"
-          upstream_url="$(jq -r '.browser_download_url' <<<"$upstream_asset")"
-          test "$upstream_url" = "$WINDOWS_ASSET_URL"
-
-          upstream_ref="$(curl --fail --silent --show-error --location \
-            -H 'Accept: application/vnd.github+json' \
-            -H "X-GitHub-Api-Version: $api_version" \
-            https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/ref/tags/V8.0.1)"
-          object_type="$(jq -r '.object.type' <<<"$upstream_ref")"
-          object_sha="$(jq -r '.object.sha' <<<"$upstream_ref")"
-          for _ in 1 2 3 4 5; do
-            if [[ "$object_type" == "commit" ]]; then
-              break
-            fi
-            test "$object_type" = "tag"
-            tag_json="$(curl --fail --silent --show-error --location \
-              -H 'Accept: application/vnd.github+json' \
-              -H "X-GitHub-Api-Version: $api_version" \
-              "https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/tags/$object_sha")"
-            object_type="$(jq -r '.object.type' <<<"$tag_json")"
-            object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
-          done
-          test "$object_type" = "commit"
-          test "$object_sha" = "$OCCT_SOURCE_SHA"
-
-          curl --fail --location --retry 3 --retry-all-errors \
-            "$upstream_url" \
-            --output "$out/$WINDOWS_ASSET"
-          test "$(wc -c < "$out/$WINDOWS_ASSET" | tr -d ' ')" = "$WINDOWS_ASSET_SIZE"
-          actual="$(sha256sum "$out/$WINDOWS_ASSET" | awk '{print $1}')"
-          test "$actual" = "$WINDOWS_ASSET_SHA256"
-          printf '%s  %s\n' "$WINDOWS_ASSET_SHA256" "$WINDOWS_ASSET" \
-            > "$out/$WINDOWS_ASSET.sha256"
-          (cd "$out" && sha256sum -c "$WINDOWS_ASSET.sha256")
-
-      # actions/upload-artifact v4.6.2
-      - name: Upload official Windows SDK
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: occt-windows-sdk-official
-          path: ${{ runner.temp }}/windows-sdk/*
-          if-no-files-found: error
-          retention-days: 3
+    name: Windows SDKs
+    uses: ./.github/workflows/lean-windows-sdk-probe.yml
 
   publish:
     name: Publish combined OCCT SDK release
@@ -132,17 +72,18 @@ jobs:
           path: ${{ runner.temp }}/release-assets/macos
           merge-multiple: true
 
-      - name: Download official Windows SDK
+      - name: Download Windows SDKs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: occt-windows-sdk-official
+          pattern: occt-windows-sdk-*
           path: ${{ runner.temp }}/release-assets/windows
+          merge-multiple: true
 
       - name: Verify tag and exact combined asset inventory
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "occt-sdk-$OCCT_VERSION"
+          test "$GITHUB_REF_NAME" = "occt-sdk-$OCCT_VERSION-r2"
           bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
           bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
@@ -214,10 +155,11 @@ jobs:
           bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
           mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
-          test "${#assets[@]}" -eq 14
+          test "${#assets[@]}" -eq 16
 
           notes="OCCT $OCCT_VERSION SDK bundle built from official OCCT source $SOURCE_SHA."
-          notes="$notes"$'\n\n'"Windows: official Open-Cascade-SAS V8.0.1 combined x64 Release/no-PCH package, copied byte-for-byte and verified against upstream SHA-256 $WINDOWS_SHA256."
+          notes="$notes"$'\n\n'"Windows shared: official Open-Cascade-SAS V8.0.1 combined x64 Release/no-PCH package, copied byte-for-byte and verified against upstream SHA-256 $WINDOWS_SHA256."
+          notes="$notes"$'\n'"Windows static: qualified lean x64 VC143 static SDK from the same official OCCT source commit, with optional third-party dependencies disabled."
           notes="$notes"$'\n'"Linux: qualified x86_64 shared/static SDKs with glibc 2.17 baseline."
           notes="$notes"$'\n'"macOS: qualified x86_64 and arm64 shared/static SDKs targeting macOS 13.0."
           notes="$notes"$'\n\n'"Workflow revision: $WORKFLOW_SHA"
@@ -237,7 +179,7 @@ jobs:
             "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
           test "$(jq -r '.draft' <<<"$release_json")" = "true"
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 14
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
           for file in "${assets[@]}"; do
             name="$(basename "$file")"
             expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
@@ -257,7 +199,7 @@ jobs:
           test "$(jq -r '.draft' <<<"$release_json")" = "false"
           test "$(jq -r '.immutable' <<<"$release_json")" = "true"
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$GITHUB_REF_NAME"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 14
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
           for file in "${assets[@]}"; do
             name="$(basename "$file")"
             expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
