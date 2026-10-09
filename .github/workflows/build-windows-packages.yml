@@ -372,10 +372,10 @@ jobs:
 
           mapfile -t names < <(for file in "${files[@]}"; do basename "$file"; done | sort)
           expected=(
-            "$STATIC_ASSET"
-            "$STATIC_ASSET.sha256"
             "$WINDOWS_SHARED_ASSET"
             "$WINDOWS_SHARED_ASSET.sha256"
+            "$STATIC_ASSET"
+            "$STATIC_ASSET.sha256"
           )
           for i in 0 1 2 3; do
             test "${names[$i]}" = "${expected[$i]}"
