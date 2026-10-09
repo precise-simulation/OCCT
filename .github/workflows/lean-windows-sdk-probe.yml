@@ -108,7 +108,7 @@ jobs:
             '-B', $build,
             '-G', 'Visual Studio 17 2022',
             '-A', 'x64',
-            '-DBUILD_LIBRARY_TYPE=Static',
+            '-DBUILD_LIBRARY_TYPE:STRING=Static',
             '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL',
             '-DBUILD_OPT_PROFILE=Default',
             '-DBUILD_USE_PCH=OFF',
