@@ -89,7 +89,7 @@ jobs:
           & cmake @configure
           if ($LASTEXITCODE -ne 0) { throw 'OCCT configure failed.' }
 
-          $cache = Get-Content (Join-Path $build 'CMakeCache.txt') -Raw
+          $cache = (Get-Content (Join-Path $build 'CMakeCache.txt') -Raw) -replace "`r`n?", "`n"
           foreach ($required in @(
             'BUILD_LIBRARY_TYPE:STRING=Shared',
             'CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
@@ -523,7 +523,7 @@ jobs:
           & cmake @configure
           if ($LASTEXITCODE -ne 0) { throw 'OCCT configure failed.' }
 
-          $cache = Get-Content (Join-Path $build 'CMakeCache.txt') -Raw
+          $cache = (Get-Content (Join-Path $build 'CMakeCache.txt') -Raw) -replace "`r`n?", "`n"
           foreach ($required in @(
             'BUILD_LIBRARY_TYPE:STRING=Static',
             'CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
