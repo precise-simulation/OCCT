@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - occt-sdk-8.0.1-r2
+      - occt-sdk-8.0.1-r3
 
 permissions:
   contents: read
@@ -19,10 +19,6 @@ concurrency:
 env:
   OCCT_VERSION: '8.0.1'
   OCCT_SOURCE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
-  WINDOWS_ASSET: occt-combined-release-no-pch.zip
-  WINDOWS_ASSET_SIZE: '257767212'
-  WINDOWS_ASSET_SHA256: afe36b6abcc7964d0f8b0404ccb16e7c1f6ddd8e43b450c865f7e7f092440e9d
-  WINDOWS_ASSET_URL: https://github.com/Open-Cascade-SAS/OCCT/releases/download/V8.0.1/occt-combined-release-no-pch.zip
 
 jobs:
   linux:
@@ -51,7 +47,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       WORKFLOW_SHA: ${{ github.sha }}
       SOURCE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
-      WINDOWS_SHA256: afe36b6abcc7964d0f8b0404ccb16e7c1f6ddd8e43b450c865f7e7f092440e9d
     steps:
       # actions/checkout v4.2.2
       - name: Checkout exact release workflow revision
@@ -86,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "occt-sdk-$OCCT_VERSION-r2"
+          test "$GITHUB_REF_NAME" = "occt-sdk-$OCCT_VERSION-r3"
           bash .github/linux-occt-sdk/verify-tag.sh "$GITHUB_REF_NAME" "$WORKFLOW_SHA"
           bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
@@ -161,10 +156,10 @@ jobs:
           test "${#assets[@]}" -eq 16
 
           notes="OCCT $OCCT_VERSION SDK bundle built from official OCCT source $SOURCE_SHA."
-          notes="$notes"$'\n\n'"Windows shared: official Open-Cascade-SAS V8.0.1 combined x64 Release/no-PCH package, copied byte-for-byte and verified against upstream SHA-256 $WINDOWS_SHA256."
+          notes="$notes"$'\n\n'"Windows shared: qualified lean x64 VC143 source-built SDK restricted to the geometry/data-exchange toolkit closure with optional third-party dependencies disabled."
           notes="$notes"$'\n'"Windows static: qualified lean x64 VC143 static SDK from the same official OCCT source commit, with optional third-party dependencies disabled."
-          notes="$notes"$'\n'"Linux: qualified x86_64 shared/static SDKs with glibc 2.17 baseline."
-          notes="$notes"$'\n'"macOS: qualified x86_64 and arm64 shared/static SDKs targeting macOS 13.0."
+          notes="$notes"$'\n'"Linux: qualified lean x86_64 shared/static SDKs with glibc 2.17 baseline."
+          notes="$notes"$'\n'"macOS: qualified lean x86_64 and arm64 shared/static SDKs targeting macOS 13.0."
           notes="$notes"$'\n\n'"Workflow revision: $WORKFLOW_SHA"
           notes="$notes"$'\n\n'"<!-- $run_marker -->"
 

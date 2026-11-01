@@ -1,12 +1,18 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <IFSelect_ReturnStatus.hxx>
+#include <IGESControl_Reader.hxx>
+#include <IGESControl_Writer.hxx>
 #include <Message_MsgFile.hxx>
 #include <Resource_Manager.hxx>
 #include <STEPControl_Reader.hxx>
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Writer.hxx>
+#include <StlAPI_Reader.hxx>
+#include <StlAPI_Writer.hxx>
 #include <TCollection_AsciiString.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
@@ -44,6 +50,19 @@ int main()
     return 10;
   }
 
+  BRepOffsetAPI_MakeOffsetShape anOffsetBuilder;
+  anOffsetBuilder.PerformBySimple(aBox1, 1.0);
+  if (!anOffsetBuilder.IsDone() || anOffsetBuilder.Shape().IsNull())
+  {
+    return 11;
+  }
+
+  BRepMesh_IncrementalMesh aMesher(aFused, 0.5);
+  if (!aMesher.IsDone())
+  {
+    return 12;
+  }
+
   const char* aStepPath = "occt-sdk-consumer.step";
   STEPControl_Writer aWriter;
   if (aWriter.Transfer(aFused, STEPControl_AsIs) != IFSelect_RetDone
@@ -78,6 +97,45 @@ int main()
   if (!hasValidSolid)
   {
     return 50;
+  }
+
+  const char* anIgesPath = "occt-sdk-consumer.iges";
+  IGESControl_Writer anIgesWriter("MM", 1);
+  if (!anIgesWriter.AddShape(aFused) || !anIgesWriter.Write(anIgesPath))
+  {
+    return 60;
+  }
+
+  IGESControl_Reader anIgesReader;
+  if (anIgesReader.ReadFile(anIgesPath) != IFSelect_RetDone
+   || anIgesReader.TransferRoots() <= 0)
+  {
+    return 61;
+  }
+  const TopoDS_Shape anIgesRoundTrip = anIgesReader.OneShape();
+  std::remove(anIgesPath);
+  if (anIgesRoundTrip.IsNull())
+  {
+    return 62;
+  }
+
+  const char* anStlPath = "occt-sdk-consumer.stl";
+  StlAPI_Writer aStlWriter;
+  if (!aStlWriter.Write(aFused, anStlPath))
+  {
+    return 70;
+  }
+
+  TopoDS_Shape anStlRoundTrip;
+  StlAPI_Reader aStlReader;
+  if (!aStlReader.Read(anStlRoundTrip, anStlPath))
+  {
+    return 71;
+  }
+  std::remove(anStlPath);
+  if (anStlRoundTrip.IsNull())
+  {
+    return 72;
   }
 
   return 0;

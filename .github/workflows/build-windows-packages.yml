@@ -15,54 +15,435 @@ permissions:
 env:
   OCCT_VERSION: '8.0.1'
   OCCT_SOURCE_SHA: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
-  WINDOWS_SHARED_ASSET: occt-combined-release-no-pch.zip
-  WINDOWS_SHARED_ASSET_SIZE: '257767212'
-  WINDOWS_SHARED_SHA256: afe36b6abcc7964d0f8b0404ccb16e7c1f6ddd8e43b450c865f7e7f092440e9d
-  WINDOWS_SHARED_URL: https://github.com/Open-Cascade-SAS/OCCT/releases/download/V8.0.1/occt-combined-release-no-pch.zip
 
 jobs:
   shared:
-    name: official-shared
-    runs-on: ubuntu-24.04
+    name: lean-shared
+    runs-on: windows-2022
+    timeout-minutes: 120
     steps:
-      - name: Download and verify official shared OCCT SDK
-        shell: bash
+      - name: Checkout exact OCCT source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.OCCT_SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+
+      - name: Verify source identity and version
+        shell: pwsh
         run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/windows-shared-sdk"
-          mkdir -p "$out"
+          $ErrorActionPreference = 'Stop'
+          $actual = (git -C source rev-parse HEAD).Trim()
+          if ($actual -ne $env:OCCT_SOURCE_SHA) { throw "OCCT checkout mismatch: $actual" }
 
-          api_version="2022-11-28"
-          upstream_release="$(curl --fail --silent --show-error --location \
-            -H 'Accept: application/vnd.github+json' \
-            -H "X-GitHub-Api-Version: $api_version" \
-            https://api.github.com/repos/Open-Cascade-SAS/OCCT/releases/tags/V8.0.1)"
-          upstream_asset="$(jq -c --arg name "$WINDOWS_SHARED_ASSET" \
-            '.assets[] | select(.name == $name)' <<<"$upstream_release")"
-          test -n "$upstream_asset"
-          test "$(jq -r '.size' <<<"$upstream_asset")" = "$WINDOWS_SHARED_ASSET_SIZE"
-          test "$(jq -r '.digest' <<<"$upstream_asset")" = "sha256:$WINDOWS_SHARED_SHA256"
-          upstream_url="$(jq -r '.browser_download_url' <<<"$upstream_asset")"
-          test "$upstream_url" = "$WINDOWS_SHARED_URL"
+          $versionText = Get-Content 'source/adm/cmake/version.cmake' -Raw
+          $major = [regex]::Match($versionText, 'set \(OCC_VERSION_MAJOR +([0-9]+) *\)').Groups[1].Value
+          $minor = [regex]::Match($versionText, 'set \(OCC_VERSION_MINOR +([0-9]+) *\)').Groups[1].Value
+          $patch = [regex]::Match($versionText, 'set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)').Groups[1].Value
+          $version = "$major.$minor.$patch"
+          if ($version -ne $env:OCCT_VERSION) { throw "OCCT version mismatch: $version" }
 
-          upstream_ref="$(curl --fail --silent --show-error --location \
-            -H 'Accept: application/vnd.github+json' \
-            -H "X-GitHub-Api-Version: $api_version" \
-            https://api.github.com/repos/Open-Cascade-SAS/OCCT/git/ref/tags/V8.0.1)"
-          test "$(jq -r '.object.type' <<<"$upstream_ref")" = "commit"
-          test "$(jq -r '.object.sha' <<<"$upstream_ref")" = "$OCCT_SOURCE_SHA"
+      - name: Configure all-optional-off lean shared OCCT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $build = Join-Path $env:RUNNER_TEMP 'occt-build-shared-lean'
+          $install = Join-Path $env:RUNNER_TEMP 'occt-install-shared-lean'
+          $toolkits = 'TKDESTEP;TKDEIGES;TKDESTL;TKOffset;TKMesh'
+          $configure = @(
+            '-S', (Join-Path $env:GITHUB_WORKSPACE 'source'),
+            '-B', $build,
+            '-G', 'Visual Studio 17 2022',
+            '-A', 'x64',
+            '-DBUILD_LIBRARY_TYPE:STRING=Shared',
+            '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
+            '-DBUILD_OPT_PROFILE=Production',
+            '-DBUILD_USE_PCH=OFF',
+            '-DBUILD_MODULE_Draw=OFF',
+            '-DBUILD_MODULE_FoundationClasses=OFF',
+            '-DBUILD_MODULE_ModelingData=OFF',
+            '-DBUILD_MODULE_ModelingAlgorithms=OFF',
+            '-DBUILD_MODULE_ApplicationFramework=OFF',
+            '-DBUILD_MODULE_DataExchange=OFF',
+            '-DBUILD_MODULE_Visualization=OFF',
+            "-DBUILD_ADDITIONAL_TOOLKITS=$toolkits",
+            '-DUSE_FREETYPE=OFF',
+            '-DUSE_FREEIMAGE=OFF',
+            '-DUSE_FFMPEG=OFF',
+            '-DUSE_OPENVR=OFF',
+            '-DUSE_RAPIDJSON=OFF',
+            '-DUSE_DRACO=OFF',
+            '-DUSE_TBB=OFF',
+            '-DUSE_EIGEN=OFF',
+            '-DUSE_TCL=OFF',
+            '-DUSE_TK=OFF',
+            '-DUSE_VTK=OFF',
+            '-DUSE_OPENGL=OFF',
+            '-DUSE_GLES2=OFF',
+            '-DUSE_D3D=OFF',
+            '-DUSE_MMGR_TYPE=NATIVE',
+            '-D3RDPARTY_DIR=',
+            "-DINSTALL_DIR=$install"
+          )
+          & cmake @configure
+          if ($LASTEXITCODE -ne 0) { throw 'OCCT configure failed.' }
 
-          curl --fail --location --retry 3 --retry-all-errors \
-            "$upstream_url" \
-            --output "$out/$WINDOWS_SHARED_ASSET"
-          test "$(wc -c < "$out/$WINDOWS_SHARED_ASSET" | tr -d ' ')" = "$WINDOWS_SHARED_ASSET_SIZE"
-          actual="$(sha256sum "$out/$WINDOWS_SHARED_ASSET" | awk '{print $1}')"
-          test "$actual" = "$WINDOWS_SHARED_SHA256"
-          printf '%s  %s\n' "$WINDOWS_SHARED_SHA256" "$WINDOWS_SHARED_ASSET" \
-            > "$out/$WINDOWS_SHARED_ASSET.sha256"
-          (cd "$out" && sha256sum -c "$WINDOWS_SHARED_ASSET.sha256")
+          $cache = Get-Content (Join-Path $build 'CMakeCache.txt') -Raw
+          foreach ($required in @(
+            'BUILD_LIBRARY_TYPE:STRING=Shared',
+            'CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
+            'BUILD_OPT_PROFILE:STRING=Production',
+            'USE_MMGR_TYPE:STRING=NATIVE'
+          )) {
+            if (-not $cache.Contains($required)) { throw "Expected CMake cache entry missing: $required" }
+          }
+          $mustBeOff = @(
+            'BUILD_MODULE_Draw','BUILD_MODULE_FoundationClasses','BUILD_MODULE_ModelingData',
+            'BUILD_MODULE_ModelingAlgorithms','BUILD_MODULE_ApplicationFramework',
+            'BUILD_MODULE_DataExchange','BUILD_MODULE_Visualization','USE_FREETYPE','USE_FREEIMAGE',
+            'USE_FFMPEG','USE_OPENVR','USE_RAPIDJSON','USE_DRACO','USE_TBB','USE_EIGEN','USE_TCL',
+            'USE_TK','USE_VTK','USE_OPENGL','USE_GLES2','USE_D3D'
+          )
+          foreach ($option in $mustBeOff) {
+            $match = [regex]::Match($cache, "(?m)^$([regex]::Escape($option)):[^=]*=(.*)$")
+            if ($match.Success -and $match.Groups[1].Value.Trim() -ne 'OFF') {
+              throw "CMake cache option is not disabled: $option=$($match.Groups[1].Value.Trim())"
+            }
+          }
+          if ($cache -notmatch '(?m)^BUILD_ADDITIONAL_TOOLKITS:[^=]*=TKDESTEP;TKDEIGES;TKDESTL;TKOffset;TKMesh$') {
+            throw 'BUILD_ADDITIONAL_TOOLKITS does not match the lean root toolkit set.'
+          }
+          if ($cache -notmatch '(?m)^3RDPARTY_DIR:[^=]*=$') { throw '3RDPARTY_DIR is not empty in the CMake cache.' }
+          $toolkitProjects = @(Get-ChildItem $build -File -Recurse -Filter 'TK*.vcxproj')
+          if ($toolkitProjects.Count -eq 0) { throw 'No OCCT toolkit Visual Studio projects were generated.' }
+          foreach ($project in $toolkitProjects) {
+            $projectText = Get-Content $project.FullName -Raw
+            if (-not $projectText.Contains('<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>')) {
+              throw "$($project.Name) does not encode the /MD runtime contract."
+            }
+            if ($projectText.Contains('<RuntimeLibrary>MultiThreaded</RuntimeLibrary>')) {
+              throw "$($project.Name) unexpectedly encodes the /MT runtime."
+            }
+          }
+          "OCCT_SHARED_BUILD=$build" >> $env:GITHUB_ENV
+          "OCCT_SHARED_ROOT=$install" >> $env:GITHUB_ENV
 
-      - name: Upload official shared SDK evidence
+      - name: Build and install lean shared OCCT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build $env:OCCT_SHARED_BUILD --target install --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'OCCT build/install failed.' }
+
+      - name: Verify shared toolkit closure and dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $config = Join-Path $env:OCCT_SHARED_ROOT 'cmake/OpenCASCADEConfig.cmake'
+          if (-not (Test-Path -LiteralPath $config)) { throw "Missing OpenCASCADEConfig.cmake: $config" }
+
+          $shared = Select-String -Path $config -Pattern '^set \(OpenCASCADE_BUILD_SHARED_LIBS +ON\)$' | Select-Object -First 1
+          if (-not $shared) { throw 'Installed OpenCASCADEConfig.cmake does not report a shared build.' }
+
+          $match = Select-String -Path $config -Pattern '^set \(OpenCASCADE_LIBRARIES (.*)\)$' | Select-Object -First 1
+          if (-not $match) { throw 'OpenCASCADE_LIBRARIES was not found.' }
+          $libs = @($match.Matches[0].Groups[1].Value -split ';')
+          if ($libs.Count -ne 28) { throw "Expected 28-toolkit closure, got $($libs.Count): $($libs -join ',')" }
+          $expected = @(
+            'TKDESTEP','TKDE','TKBRep','TKernel','TKMath','TKXSBase','TKTopAlgo','TKG2d',
+            'TKCAF','TKCDF','TKLCAF','TKG3d','TKXCAF','TKShHealing','TKGeomBase','TKGeomAlgo',
+            'TKBO','TKPrim','TKService','TKV3d','TKVCAF','TKMesh','TKHLR','TKDEIGES',
+            'TKBool','TKDESTL','TKOffset','TKFillet'
+          )
+          $toolkitDiff = @(Compare-Object ($expected | Sort-Object) ($libs | Sort-Object))
+          if ($toolkitDiff.Count -ne 0) {
+            throw "Lean shared toolkit closure mismatch: $($toolkitDiff | Out-String)"
+          }
+          if ($libs -contains 'TKDECascade') { throw 'Unexpected TKDECascade in lean toolkit closure.' }
+
+          $binaryDir = Join-Path $env:OCCT_SHARED_ROOT 'win64/vc14/bin'
+          $libraryDir = Join-Path $env:OCCT_SHARED_ROOT 'win64/vc14/lib'
+          if (-not (Test-Path -LiteralPath $binaryDir)) { throw "Missing shared binary directory: $binaryDir" }
+          if (-not (Test-Path -LiteralPath $libraryDir)) { throw "Missing shared library directory: $libraryDir" }
+
+          $dlls = @(Get-ChildItem $binaryDir -File -Filter 'TK*.dll')
+          $importLibs = @(Get-ChildItem $libraryDir -File -Filter 'TK*.lib')
+          if ($dlls.Count -ne 28) { throw "Expected 28 shared OCCT DLLs, got $($dlls.Count)." }
+          if ($importLibs.Count -ne 28) { throw "Expected 28 OCCT import libraries, got $($importLibs.Count)." }
+          foreach ($toolkit in $libs) {
+            if (-not (Test-Path -LiteralPath (Join-Path $binaryDir "$toolkit.dll"))) {
+              throw "Missing shared toolkit DLL: $toolkit.dll"
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $libraryDir "$toolkit.lib"))) {
+              throw "Missing shared toolkit import library: $toolkit.lib"
+            }
+          }
+
+          $allDlls = @(Get-ChildItem $env:OCCT_SHARED_ROOT -File -Recurse -Filter '*.dll')
+          if ($allDlls.Count -ne 28) {
+            throw "Lean shared install contains unexpected non-OCCT DLLs: $($allDlls.Name -join ',')"
+          }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found: $vswhere" }
+          $dumpbin = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1).Trim()
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) {
+            throw 'dumpbin.exe was not found in the Visual Studio installation.'
+          }
+
+          $excluded = '(?i)(avcodec|avformat|avutil|avdevice|avfilter|swscale|swresample|freeimage|freetype|openvr|tbb|jemalloc|draco|vtk|tcl|tk8|opengl32|libgles|d3d|dxgi|vcomp)'
+          foreach ($dll in $dlls) {
+            $deps = (& $dumpbin /dependents $dll.FullName 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin /dependents failed for $($dll.Name)." }
+            if ($deps -match $excluded) {
+              throw "$($dll.Name) imports an excluded optional dependency."
+            }
+          }
+
+          $files = @(Get-ChildItem $env:OCCT_SHARED_ROOT -File -Recurse)
+          $installBytes = ($files | Measure-Object Length -Sum).Sum
+          $dllBytes = ($dlls | Measure-Object Length -Sum).Sum
+          Write-Host "toolkit-count=$($libs.Count)"
+          Write-Host "toolkits=$($libs -join ',')"
+          Write-Host "occt-install-bytes=$installBytes"
+          Write-Host ("occt-install-mib={0:N3}" -f ($installBytes / 1MB))
+          Write-Host "occt-shared-dll-bytes=$dllBytes"
+          Write-Host ("occt-shared-dll-mib={0:N3}" -f ($dllBytes / 1MB))
+          "OCCT_SHARED_TOOLKITS=$($libs -join ',')" >> $env:GITHUB_ENV
+          "OCCT_SHARED_BIN=$binaryDir" >> $env:GITHUB_ENV
+
+      - name: Relocate and consume shared SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $relocated = Join-Path $env:RUNNER_TEMP 'relocated-shared-sdk'
+          Copy-Item -LiteralPath $env:OCCT_SHARED_ROOT -Destination $relocated -Recurse
+
+          $consumer = Join-Path $env:RUNNER_TEMP 'shared-consumer'
+          New-Item -ItemType Directory -Force -Path $consumer | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.20)
+          project(occt_shared_smoke LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_FIND_USE_PACKAGE_REGISTRY FALSE)
+          set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY FALSE)
+          find_package(OpenCASCADE CONFIG REQUIRED)
+          if(NOT OpenCASCADE_BUILD_SHARED_LIBS)
+            message(FATAL_ERROR "Expected a shared OpenCASCADE package")
+          endif()
+          file(REAL_PATH "${OpenCASCADE_INSTALL_PREFIX}" _occt_prefix)
+          foreach(_var OpenCASCADE_BINARY_DIR OpenCASCADE_LIBRARY_DIR OpenCASCADE_INCLUDE_DIR OpenCASCADE_RESOURCE_DIR)
+            file(REAL_PATH "${${_var}}" _occt_path)
+            string(TOLOWER "${_occt_prefix}" _occt_prefix_lower)
+            string(TOLOWER "${_occt_path}" _occt_path_lower)
+            string(FIND "${_occt_path_lower}" "${_occt_prefix_lower}/" _occt_inside)
+            if(NOT _occt_inside EQUAL 0)
+              message(FATAL_ERROR "${_var} escapes relocated SDK: ${_occt_path}")
+            endif()
+          endforeach()
+          file(WRITE "${CMAKE_BINARY_DIR}/occt-binary-dir.txt" "${OpenCASCADE_BINARY_DIR}")
+          add_executable(occt_shared_smoke main.cpp)
+          target_include_directories(occt_shared_smoke PRIVATE ${OpenCASCADE_INCLUDE_DIR})
+          target_link_directories(occt_shared_smoke PRIVATE ${OpenCASCADE_LIBRARY_DIR})
+          target_link_libraries(occt_shared_smoke PRIVATE ${OpenCASCADE_LIBRARIES})
+          '@ | Set-Content (Join-Path $consumer 'CMakeLists.txt')
+          @'
+          #include <BRepMesh_IncrementalMesh.hxx>
+          #include <BRepOffsetAPI_MakeOffsetShape.hxx>
+          #include <BRepPrimAPI_MakeBox.hxx>
+          #include <IFSelect_ReturnStatus.hxx>
+          #include <IGESControl_Reader.hxx>
+          #include <IGESControl_Writer.hxx>
+          #include <RWStl.hxx>
+          #include <STEPControl_Reader.hxx>
+          #include <STEPControl_Writer.hxx>
+          #include <StlAPI_Writer.hxx>
+          #include <TopoDS_Shape.hxx>
+          int main()
+          {
+            const TopoDS_Shape aShape = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
+            if (aShape.IsNull()) return 1;
+
+            BRepMesh_IncrementalMesh aMesher(aShape, 0.1);
+            if (!aMesher.IsDone()) return 2;
+
+            BRepOffsetAPI_MakeOffsetShape anOffset;
+            anOffset.PerformBySimple(aShape, 0.05);
+            if (!anOffset.IsDone() || anOffset.Shape().IsNull()) return 3;
+
+            STEPControl_Writer aWriter;
+            if (aWriter.Transfer(aShape, STEPControl_AsIs) != IFSelect_RetDone) return 4;
+            if (aWriter.Write("shared-smoke.step") != IFSelect_RetDone) return 5;
+            STEPControl_Reader aReader;
+            if (aReader.ReadFile("shared-smoke.step") != IFSelect_RetDone) return 6;
+            if (aReader.TransferRoots() <= 0 || aReader.OneShape().IsNull()) return 7;
+
+            IGESControl_Writer anIgesWriter;
+            if (!anIgesWriter.AddShape(aShape) || !anIgesWriter.Write("shared-smoke.igs")) return 8;
+            IGESControl_Reader anIgesReader;
+            if (anIgesReader.ReadFile("shared-smoke.igs") != IFSelect_RetDone) return 9;
+            if (anIgesReader.TransferRoots() <= 0 || anIgesReader.OneShape().IsNull()) return 10;
+
+            StlAPI_Writer anStlWriter;
+            if (!anStlWriter.Write(aShape, "shared-smoke.stl")) return 11;
+            if (RWStl::ReadFile("shared-smoke.stl").IsNull()) return 12;
+            return 0;
+          }
+          '@ | Set-Content (Join-Path $consumer 'main.cpp')
+
+          $consumerBuild = Join-Path $env:RUNNER_TEMP 'shared-consumer-build'
+          & cmake -S $consumer -B $consumerBuild -G 'Visual Studio 17 2022' -A x64 "-DOpenCASCADE_DIR=$(Join-Path $relocated 'cmake')"
+          if ($LASTEXITCODE -ne 0) { throw 'Shared SDK consumer configure failed.' }
+          $cache = Get-Content (Join-Path $consumerBuild 'CMakeCache.txt') -Raw
+          if ($cache.Contains($env:OCCT_SHARED_ROOT)) { throw 'Relocated shared consumer still references the original install.' }
+          & cmake --build $consumerBuild --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Shared SDK consumer build failed.' }
+
+          $binaryDir = (Get-Content (Join-Path $consumerBuild 'occt-binary-dir.txt') -Raw).Trim()
+          $expectedBinaryDir = Join-Path $relocated 'win64/vc14/bin'
+          if ([IO.Path]::GetFullPath($binaryDir) -ne [IO.Path]::GetFullPath($expectedBinaryDir)) {
+            throw "Relocated OpenCASCADE_BINARY_DIR mismatch: $binaryDir"
+          }
+          $oldPath = $env:PATH
+          $env:PATH = "$binaryDir;$oldPath"
+          Remove-Item Env:CASROOT -ErrorAction SilentlyContinue
+          Remove-Item Env:CSF_OCCTBinPath -ErrorAction SilentlyContinue
+          Remove-Item Env:CSF_OCCTLibPath -ErrorAction SilentlyContinue
+          Push-Location $consumer
+          try {
+            & (Join-Path $consumerBuild 'Release/occt_shared_smoke.exe')
+            if ($LASTEXITCODE -ne 0) { throw "Shared SDK consumer run failed with $LASTEXITCODE." }
+            if (-not (Test-Path 'shared-smoke.step')) { throw 'Shared STEP output was not produced.' }
+          } finally {
+            Pop-Location
+            $env:PATH = $oldPath
+          }
+
+      - name: Package lean shared OCCT SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha12 = $env:OCCT_SOURCE_SHA.Substring(0, 12)
+          $baseName = "opencascade-$env:OCCT_VERSION-windows-x86_64-vc143-shared-lean-$sha12"
+          $stage = Join-Path $env:RUNNER_TEMP $baseName
+          Copy-Item -LiteralPath $env:OCCT_SHARED_ROOT -Destination $stage -Recurse
+          Copy-Item -LiteralPath 'source/LICENSE_LGPL_21.txt' -Destination $stage
+          Copy-Item -LiteralPath 'source/OCCT_LGPL_EXCEPTION.txt' -Destination $stage
+
+          @(
+            "package=$baseName",
+            "occt-version=$env:OCCT_VERSION",
+            "occt-source-sha=$env:OCCT_SOURCE_SHA",
+            "workflow-sha=$env:GITHUB_SHA",
+            'platform=windows-x86_64',
+            'msvc-toolset=vc143',
+            'msvc-runtime=MultiThreadedDLL',
+            'linkage=shared',
+            'profile=lean',
+            'build-opt-profile=Production',
+            'optional-third-party=none',
+            'toolkit-count=28',
+            "toolkits=$env:OCCT_SHARED_TOOLKITS"
+          ) | Set-Content (Join-Path $stage 'sdk-manifest.txt')
+
+          $out = Join-Path $env:RUNNER_TEMP 'windows-shared-sdk'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $archive = Join-Path $out "$baseName.zip"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
+          $archiveBytes = (Get-Item $archive).Length
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          "$hash  $baseName.zip" | Set-Content (Join-Path $out "$baseName.zip.sha256")
+          Write-Host "shared-sdk-zip-bytes=$archiveBytes"
+          Write-Host ("shared-sdk-zip-mib={0:N3}" -f ($archiveBytes / 1MB))
+          Get-ChildItem $out | Select-Object Name,Length
+
+      - name: Re-extract and requalify final shared SDK ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'windows-shared-sdk'
+          $archives = @(Get-ChildItem -LiteralPath $out -File -Filter '*.zip')
+          if ($archives.Count -ne 1) { throw "Expected exactly one shared SDK ZIP, found $($archives.Count)." }
+          $archive = $archives[0].FullName
+          foreach ($stagingPath in @($env:OCCT_SHARED_ROOT, $env:OCCT_SHARED_BUILD)) {
+            if (Test-Path -LiteralPath $stagingPath) {
+              $quarantined = "$stagingPath-quarantined"
+              if (Test-Path -LiteralPath $quarantined) { Remove-Item -LiteralPath $quarantined -Recurse -Force }
+              Move-Item -LiteralPath $stagingPath -Destination $quarantined
+            }
+          }
+          $relocatedParent = Join-Path $env:RUNNER_TEMP 'relocated-shared-sdk-final'
+          if (Test-Path -LiteralPath $relocatedParent) { Remove-Item -LiteralPath $relocatedParent -Recurse -Force }
+          Expand-Archive -LiteralPath $archive -DestinationPath $relocatedParent
+          $roots = @(Get-ChildItem -LiteralPath $relocatedParent -Directory)
+          if ($roots.Count -ne 1) { throw 'Expected exactly one top-level SDK directory in final ZIP.' }
+          $relocated = $roots[0].FullName
+
+          $consumer = Join-Path $env:RUNNER_TEMP 'shared-consumer'
+          $consumerBuild = Join-Path $env:RUNNER_TEMP 'shared-consumer-final-build'
+          & cmake -S $consumer -B $consumerBuild -G 'Visual Studio 17 2022' -A x64 "-DOpenCASCADE_DIR=$(Join-Path $relocated 'cmake')"
+          if ($LASTEXITCODE -ne 0) { throw 'Final ZIP shared consumer configure failed.' }
+          $cache = Get-Content (Join-Path $consumerBuild 'CMakeCache.txt') -Raw
+          if ($cache.Contains($env:OCCT_SHARED_ROOT) -or $cache.Contains($env:OCCT_SHARED_BUILD)) {
+            throw 'Final ZIP shared consumer references the original build/install tree.'
+          }
+          & cmake --build $consumerBuild --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Final ZIP shared consumer build failed.' }
+
+          $binaryDir = (Get-Content (Join-Path $consumerBuild 'occt-binary-dir.txt') -Raw).Trim()
+          $expectedBinaryDir = Join-Path $relocated 'win64/vc14/bin'
+          if ([IO.Path]::GetFullPath($binaryDir) -ne [IO.Path]::GetFullPath($expectedBinaryDir)) {
+            throw "Final ZIP OpenCASCADE_BINARY_DIR mismatch: $binaryDir"
+          }
+          $exe = Join-Path $consumerBuild 'Release/occt_shared_smoke.exe'
+          $oldPath = $env:PATH
+          $env:PATH = "$binaryDir;$oldPath"
+          Remove-Item Env:CASROOT -ErrorAction SilentlyContinue
+          Remove-Item Env:CSF_OCCTBinPath -ErrorAction SilentlyContinue
+          Remove-Item Env:CSF_OCCTLibPath -ErrorAction SilentlyContinue
+          Push-Location $consumer
+          try {
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw "Final ZIP shared consumer run failed with $LASTEXITCODE." }
+            if (-not (Test-Path 'shared-smoke.step')) { throw 'Final ZIP shared STEP output was not produced.' }
+          } finally {
+            Pop-Location
+            $env:PATH = $oldPath
+          }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw "vswhere.exe not found: $vswhere" }
+          $dumpbin = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1).Trim()
+          if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin)) {
+            throw 'dumpbin.exe was not found in the Visual Studio installation.'
+          }
+          $imports = (& $dumpbin /dependents $exe 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw 'dumpbin /dependents failed for final shared consumer.' }
+          $excluded = '(?i)(avcodec|avformat|avutil|avdevice|avfilter|swscale|swresample|freeimage|freetype|openvr|tbb|jemalloc|draco|vtk|tcl|tk8|opengl32|libgles|d3d|dxgi|vcomp)'
+          foreach ($dll in @(Get-ChildItem $binaryDir -File -Filter 'TK*.dll')) {
+            $deps = (& $dumpbin /dependents $dll.FullName 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin /dependents failed for packaged $($dll.Name)." }
+            if ($deps -match $excluded) {
+              throw "Packaged $($dll.Name) imports an excluded optional dependency."
+            }
+          }
+          $tkImports = @(
+            [regex]::Matches($imports, '(?im)^\s*(TK[A-Za-z0-9_]*\.dll)\s*$') |
+              ForEach-Object { $_.Groups[1].Value } |
+              Sort-Object -Unique
+          )
+          if ($tkImports.Count -eq 0) { throw 'Final shared consumer does not import OCCT DLLs.' }
+          if ($tkImports -notcontains 'TKernel.dll') { throw 'Final shared consumer does not import TKernel.dll.' }
+          if ($tkImports -notcontains 'TKDESTEP.dll') { throw 'Final shared consumer does not import TKDESTEP.dll.' }
+          foreach ($name in $tkImports) {
+            if (-not (Test-Path -LiteralPath (Join-Path $binaryDir $name))) {
+              throw "Final shared consumer imports an OCCT DLL missing from the package: $name"
+            }
+          }
+
+      - name: Upload qualified Windows lean shared SDK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: occt-windows-sdk-shared
@@ -109,7 +490,8 @@ jobs:
             '-G', 'Visual Studio 17 2022',
             '-A', 'x64',
             '-DBUILD_LIBRARY_TYPE:STRING=Static',
-            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL',
+            '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
             '-DBUILD_OPT_PROFILE=Default',
             '-DBUILD_USE_PCH=OFF',
             '-DBUILD_MODULE_Draw=OFF',
@@ -144,15 +526,38 @@ jobs:
           $cache = Get-Content (Join-Path $build 'CMakeCache.txt') -Raw
           foreach ($required in @(
             'BUILD_LIBRARY_TYPE:STRING=Static',
-            'USE_FREETYPE:BOOL=OFF',
-            'USE_FREEIMAGE:BOOL=OFF',
-            'USE_FFMPEG:BOOL=OFF',
-            'USE_OPENVR:BOOL=OFF',
-            'USE_TBB:BOOL=OFF',
-            'BUILD_MODULE_Visualization:BOOL=OFF',
+            'CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreadedDLL',
             'USE_MMGR_TYPE:STRING=NATIVE'
           )) {
             if (-not $cache.Contains($required)) { throw "Expected CMake cache entry missing: $required" }
+          }
+          $mustBeOff = @(
+            'BUILD_MODULE_Draw','BUILD_MODULE_FoundationClasses','BUILD_MODULE_ModelingData',
+            'BUILD_MODULE_ModelingAlgorithms','BUILD_MODULE_ApplicationFramework',
+            'BUILD_MODULE_DataExchange','BUILD_MODULE_Visualization','USE_FREETYPE','USE_FREEIMAGE',
+            'USE_FFMPEG','USE_OPENVR','USE_RAPIDJSON','USE_DRACO','USE_TBB','USE_EIGEN','USE_TCL',
+            'USE_TK','USE_VTK','USE_OPENGL','USE_GLES2','USE_D3D'
+          )
+          foreach ($option in $mustBeOff) {
+            $match = [regex]::Match($cache, "(?m)^$([regex]::Escape($option)):[^=]*=(.*)$")
+            if ($match.Success -and $match.Groups[1].Value.Trim() -ne 'OFF') {
+              throw "CMake cache option is not disabled: $option=$($match.Groups[1].Value.Trim())"
+            }
+          }
+          if ($cache -notmatch '(?m)^BUILD_ADDITIONAL_TOOLKITS:[^=]*=TKDESTEP;TKDEIGES;TKDESTL;TKOffset;TKMesh$') {
+            throw 'BUILD_ADDITIONAL_TOOLKITS does not match the lean root toolkit set.'
+          }
+          if ($cache -notmatch '(?m)^3RDPARTY_DIR:[^=]*=$') { throw '3RDPARTY_DIR is not empty in the CMake cache.' }
+          $toolkitProjects = @(Get-ChildItem $build -File -Recurse -Filter 'TK*.vcxproj')
+          if ($toolkitProjects.Count -eq 0) { throw 'No OCCT toolkit Visual Studio projects were generated.' }
+          foreach ($project in $toolkitProjects) {
+            $projectText = Get-Content $project.FullName -Raw
+            if (-not $projectText.Contains('<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>')) {
+              throw "$($project.Name) does not encode the /MD runtime contract."
+            }
+            if ($projectText.Contains('<RuntimeLibrary>MultiThreaded</RuntimeLibrary>')) {
+              throw "$($project.Name) unexpectedly encodes the /MT runtime."
+            }
           }
           "OCCT_BUILD=$build" >> $env:GITHUB_ENV
           "OCCT_ROOT=$install" >> $env:GITHUB_ENV
@@ -175,6 +580,16 @@ jobs:
           if (-not $match) { throw 'OpenCASCADE_LIBRARIES was not found.' }
           $libs = @($match.Matches[0].Groups[1].Value -split ';')
           if ($libs.Count -ne 28) { throw "Expected 28-toolkit closure, got $($libs.Count): $($libs -join ',')" }
+          $expected = @(
+            'TKDESTEP','TKDE','TKBRep','TKernel','TKMath','TKXSBase','TKTopAlgo','TKG2d',
+            'TKCAF','TKCDF','TKLCAF','TKG3d','TKXCAF','TKShHealing','TKGeomBase','TKGeomAlgo',
+            'TKBO','TKPrim','TKService','TKV3d','TKVCAF','TKMesh','TKHLR','TKDEIGES',
+            'TKBool','TKDESTL','TKOffset','TKFillet'
+          )
+          $toolkitDiff = @(Compare-Object ($expected | Sort-Object) ($libs | Sort-Object))
+          if ($toolkitDiff.Count -ne 0) {
+            throw "Lean static toolkit closure mismatch: $($toolkitDiff | Out-String)"
+          }
           if ($libs -contains 'TKDECascade') { throw 'Unexpected TKDECascade in lean toolkit closure.' }
 
           $dlls = @(Get-ChildItem $env:OCCT_ROOT -File -Recurse -Filter '*.dll')
@@ -233,7 +648,23 @@ jobs:
           project(occt_static_smoke LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_FIND_USE_PACKAGE_REGISTRY FALSE)
+          set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY FALSE)
           find_package(OpenCASCADE CONFIG REQUIRED)
+          if(OpenCASCADE_BUILD_SHARED_LIBS)
+            message(FATAL_ERROR "Expected a static OpenCASCADE package")
+          endif()
+          file(REAL_PATH "${OpenCASCADE_INSTALL_PREFIX}" _occt_prefix)
+          foreach(_var OpenCASCADE_LIBRARY_DIR OpenCASCADE_INCLUDE_DIR OpenCASCADE_RESOURCE_DIR)
+            file(REAL_PATH "${${_var}}" _occt_path)
+            string(TOLOWER "${_occt_prefix}" _occt_prefix_lower)
+            string(TOLOWER "${_occt_path}" _occt_path_lower)
+            string(FIND "${_occt_path_lower}" "${_occt_prefix_lower}/" _occt_inside)
+            if(NOT _occt_inside EQUAL 0)
+              message(FATAL_ERROR "${_var} escapes relocated SDK: ${_occt_path}")
+            endif()
+          endforeach()
+          file(WRITE "${CMAKE_BINARY_DIR}/occt-library-dir.txt" "${OpenCASCADE_LIBRARY_DIR}")
           add_executable(occt_static_smoke main.cpp)
           target_include_directories(occt_static_smoke PRIVATE ${OpenCASCADE_INCLUDE_DIR})
           target_link_directories(occt_static_smoke PRIVATE ${OpenCASCADE_LIBRARY_DIR})
@@ -242,22 +673,61 @@ jobs:
             advapi32 gdi32 user32 wsock32 psapi windowscodecs winmm)
           '@ | Set-Content (Join-Path $consumer 'CMakeLists.txt')
           @'
+          #include <BRepMesh_IncrementalMesh.hxx>
+          #include <BRepOffsetAPI_MakeOffsetShape.hxx>
           #include <BRepPrimAPI_MakeBox.hxx>
-          #include <STEPControl_Writer.hxx>
           #include <IFSelect_ReturnStatus.hxx>
+          #include <IGESControl_Reader.hxx>
+          #include <IGESControl_Writer.hxx>
+          #include <RWStl.hxx>
+          #include <STEPControl_Reader.hxx>
+          #include <STEPControl_Writer.hxx>
+          #include <StlAPI_Writer.hxx>
+          #include <TopoDS_Shape.hxx>
           int main()
           {
             const TopoDS_Shape aShape = BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape();
             if (aShape.IsNull()) return 1;
+
+            BRepMesh_IncrementalMesh aMesher(aShape, 0.1);
+            if (!aMesher.IsDone()) return 2;
+
+            BRepOffsetAPI_MakeOffsetShape anOffset;
+            anOffset.PerformBySimple(aShape, 0.05);
+            if (!anOffset.IsDone() || anOffset.Shape().IsNull()) return 3;
+
             STEPControl_Writer aWriter;
-            if (aWriter.Transfer(aShape, STEPControl_AsIs) != IFSelect_RetDone) return 2;
-            return aWriter.Write("static-smoke.step") == IFSelect_RetDone ? 0 : 3;
+            if (aWriter.Transfer(aShape, STEPControl_AsIs) != IFSelect_RetDone) return 4;
+            if (aWriter.Write("static-smoke.step") != IFSelect_RetDone) return 5;
+            STEPControl_Reader aReader;
+            if (aReader.ReadFile("static-smoke.step") != IFSelect_RetDone) return 6;
+            if (aReader.TransferRoots() <= 0 || aReader.OneShape().IsNull()) return 7;
+
+            IGESControl_Writer anIgesWriter;
+            if (!anIgesWriter.AddShape(aShape) || !anIgesWriter.Write("static-smoke.igs")) return 8;
+            IGESControl_Reader anIgesReader;
+            if (anIgesReader.ReadFile("static-smoke.igs") != IFSelect_RetDone) return 9;
+            if (anIgesReader.TransferRoots() <= 0 || anIgesReader.OneShape().IsNull()) return 10;
+
+            StlAPI_Writer anStlWriter;
+            if (!anStlWriter.Write(aShape, "static-smoke.stl")) return 11;
+            if (RWStl::ReadFile("static-smoke.stl").IsNull()) return 12;
+            return 0;
           }
           '@ | Set-Content (Join-Path $consumer 'main.cpp')
 
           $consumerBuild = Join-Path $env:RUNNER_TEMP 'static-consumer-build'
           & cmake -S $consumer -B $consumerBuild -G 'Visual Studio 17 2022' -A x64 "-DOpenCASCADE_DIR=$(Join-Path $relocated 'cmake')"
           if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer configure failed.' }
+          $cache = Get-Content (Join-Path $consumerBuild 'CMakeCache.txt') -Raw
+          if ($cache.Contains($env:OCCT_ROOT) -or $cache.Contains($env:OCCT_BUILD)) {
+            throw 'Relocated static consumer still references the original build/install tree.'
+          }
+          $libraryDir = (Get-Content (Join-Path $consumerBuild 'occt-library-dir.txt') -Raw).Trim()
+          $expectedLibraryDir = Join-Path $relocated 'win64/vc14/lib'
+          if ([IO.Path]::GetFullPath($libraryDir) -ne [IO.Path]::GetFullPath($expectedLibraryDir)) {
+            throw "Relocated OpenCASCADE_LIBRARY_DIR mismatch: $libraryDir"
+          }
           & cmake --build $consumerBuild --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw 'Static SDK consumer build failed.' }
 
@@ -317,6 +787,13 @@ jobs:
           $archives = @(Get-ChildItem -LiteralPath $out -File -Filter '*.zip')
           if ($archives.Count -ne 1) { throw "Expected exactly one static SDK ZIP, found $($archives.Count)." }
           $archive = $archives[0].FullName
+          foreach ($stagingPath in @($env:OCCT_ROOT, $env:OCCT_BUILD)) {
+            if (Test-Path -LiteralPath $stagingPath) {
+              $quarantined = "$stagingPath-quarantined"
+              if (Test-Path -LiteralPath $quarantined) { Remove-Item -LiteralPath $quarantined -Recurse -Force }
+              Move-Item -LiteralPath $stagingPath -Destination $quarantined
+            }
+          }
           $relocatedParent = Join-Path $env:RUNNER_TEMP 'relocated-static-sdk-final'
           if (Test-Path -LiteralPath $relocatedParent) { Remove-Item -LiteralPath $relocatedParent -Recurse -Force }
           Expand-Archive -LiteralPath $archive -DestinationPath $relocatedParent
@@ -328,6 +805,15 @@ jobs:
           $consumerBuild = Join-Path $env:RUNNER_TEMP 'static-consumer-final-build'
           & cmake -S $consumer -B $consumerBuild -G 'Visual Studio 17 2022' -A x64 "-DOpenCASCADE_DIR=$(Join-Path $relocated 'cmake')"
           if ($LASTEXITCODE -ne 0) { throw 'Final ZIP static consumer configure failed.' }
+          $cache = Get-Content (Join-Path $consumerBuild 'CMakeCache.txt') -Raw
+          if ($cache.Contains($env:OCCT_ROOT) -or $cache.Contains($env:OCCT_BUILD)) {
+            throw 'Final ZIP static consumer references the original build/install tree.'
+          }
+          $libraryDir = (Get-Content (Join-Path $consumerBuild 'occt-library-dir.txt') -Raw).Trim()
+          $expectedLibraryDir = Join-Path $relocated 'win64/vc14/lib'
+          if ([IO.Path]::GetFullPath($libraryDir) -ne [IO.Path]::GetFullPath($expectedLibraryDir)) {
+            throw "Final ZIP OpenCASCADE_LIBRARY_DIR mismatch: $libraryDir"
+          }
           & cmake --build $consumerBuild --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw 'Final ZIP static consumer build failed.' }
 

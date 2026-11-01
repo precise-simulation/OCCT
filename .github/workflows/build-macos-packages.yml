@@ -59,6 +59,7 @@ jobs:
           set -euo pipefail
           workflow_sha="$(git -C automation rev-parse HEAD)"
           source_sha="$(git -C source rev-parse HEAD)"
+          test "$workflow_sha" = "$GITHUB_SHA"
           test "$source_sha" = "$OCCT_801_BASE_SHA"
           source_date_epoch="$(git -C source show -s --format=%ct HEAD)"
           major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' source/adm/cmake/version.cmake)"

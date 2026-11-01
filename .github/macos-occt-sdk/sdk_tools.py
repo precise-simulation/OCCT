@@ -11,14 +11,39 @@ import subprocess
 import sys
 
 
-REQUESTED_MODULES = [
-    "FoundationClasses",
-    "ModelingData",
-    "ModelingAlgorithms",
-    "ApplicationFramework",
-    "DataExchange",
-]
-REPRESENTATIVE_TOOLKITS = ("TKernel", "TKBO", "TKDESTEP", "TKV3d", "TKService")
+REQUESTED_MODULES = ()
+REQUESTED_TOOLKITS = ("TKDESTEP", "TKDEIGES", "TKDESTL", "TKOffset", "TKMesh")
+EXPECTED_TOOLKITS = (
+    "TKDESTEP",
+    "TKDE",
+    "TKBRep",
+    "TKernel",
+    "TKMath",
+    "TKXSBase",
+    "TKTopAlgo",
+    "TKG2d",
+    "TKCAF",
+    "TKCDF",
+    "TKLCAF",
+    "TKG3d",
+    "TKXCAF",
+    "TKShHealing",
+    "TKGeomBase",
+    "TKGeomAlgo",
+    "TKBO",
+    "TKPrim",
+    "TKService",
+    "TKV3d",
+    "TKVCAF",
+    "TKMesh",
+    "TKHLR",
+    "TKDEIGES",
+    "TKBool",
+    "TKDESTL",
+    "TKOffset",
+    "TKFillet",
+)
+REPRESENTATIVE_TOOLKITS = REQUESTED_TOOLKITS + ("TKernel", "TKV3d", "TKService")
 FRAMEWORK_VARS = {
     "AppKit": "OpenCASCADE_AppKit_FRAMEWORK",
     "IOKit": "OpenCASCADE_IOKit_FRAMEWORK",
@@ -28,7 +53,7 @@ APPLE_SDK_FRAMEWORK_RE = re.compile(
 )
 OPTIONAL_DEP_RE = re.compile(
     r"(freetype|freeimage|libtbb|vtk|tcl|tk8|openvr|draco|avcodec|avformat|"
-    r"swscale|avutil|X11|Xmu|libGL|OpenGL\.framework)",
+    r"avdevice|avfilter|swscale|swresample|avutil|jemalloc|X11|Xmu|libGL|OpenGL\.framework)",
     re.IGNORECASE,
 )
 
@@ -157,6 +182,31 @@ def toolkit_names(prefix: pathlib.Path, linkage: str):
         elif linkage == "shared" and ".dylib" in path.name:
             result.add(path.name[3:path.name.index(".")])
     return sorted(result)
+
+
+def configured_toolkit_names(prefix: pathlib.Path):
+    config = (prefix / "lib/cmake/opencascade/OpenCASCADEConfig.cmake").read_text(errors="replace")
+    match = re.search(r"set \(OpenCASCADE_LIBRARIES ([^)]+)\)", config)
+    require(match is not None, "OpenCASCADE_LIBRARIES is missing from OpenCASCADEConfig.cmake")
+    return sorted(set(match.group(1).replace(";", " ").split()))
+
+
+def validate_toolkit_closure(prefix: pathlib.Path, linkage: str):
+    expected = set(EXPECTED_TOOLKITS)
+    installed = toolkit_names(prefix, linkage)
+    configured = configured_toolkit_names(prefix)
+    for source, observed in (("packaged libraries", installed), ("OpenCASCADEConfig.cmake", configured)):
+        observed_set = set(observed)
+        require("TKDECascade" not in observed_set, f"unexpected TKDECascade in lean toolkit closure ({source})")
+        missing = sorted(expected - observed_set)
+        unexpected = sorted(observed_set - expected)
+        require(
+            observed_set == expected and len(observed) == len(EXPECTED_TOOLKITS),
+            f"{source} does not expose the exact {len(EXPECTED_TOOLKITS)}-toolkit lean closure; "
+            f"missing={missing}, unexpected={unexpected}, observed={observed}",
+        )
+    require(installed == configured, "packaged toolkit names differ from OpenCASCADEConfig.cmake")
+    return installed
 
 
 def real_libraries(prefix: pathlib.Path, linkage: str):
@@ -379,12 +429,7 @@ def validate_prefix(args):
     require((prefix / "lib/cmake/opencascade/OpenCASCADEConfig.cmake").is_file(), "missing OpenCASCADEConfig.cmake")
     require((prefix / "bin/env.sh").is_file(), "missing bin/env.sh")
     require((prefix / "share/opencascade/resources").is_dir(), "missing installed OCCT resources")
-    for toolkit in REPRESENTATIVE_TOOLKITS:
-        expected = prefix / "lib" / f"lib{toolkit}.a"
-        if args.linkage == "static":
-            require(expected.is_file(), f"missing static {toolkit}")
-        else:
-            require(any((prefix / "lib").glob(f"lib{toolkit}*.dylib")), f"missing shared {toolkit}")
+    validate_toolkit_closure(prefix, args.linkage)
     env_text = (prefix / "bin/env.sh").read_text(errors="replace")
     require('export THIRDPARTY_DIR=""' in env_text, "env.sh has non-empty THIRDPARTY_DIR fallback")
 
@@ -579,9 +624,11 @@ def make_thin_manifest(args):
             "requested": parse_requested_options(pathlib.Path(args.configure_options)),
             "resolved_cache": parse_cache(pathlib.Path(args.cmake_cache)),
         },
-        "requested_modules": REQUESTED_MODULES,
+        "requested_modules": list(REQUESTED_MODULES),
+        "requested_toolkits": list(REQUESTED_TOOLKITS),
+        "expected_toolkits": list(EXPECTED_TOOLKITS),
         "exported_modules": exported_modules(prefix),
-        "toolkits": toolkit_names(prefix, args.linkage),
+        "toolkits": validate_toolkit_closure(prefix, args.linkage),
         "mach_o": mach_o,
         "consumer": {
             **consumer_evidence(consumer, args.deployment_target),

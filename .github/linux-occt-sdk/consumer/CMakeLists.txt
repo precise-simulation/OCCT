@@ -8,4 +8,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(OpenCASCADE CONFIG REQUIRED)
 
 add_executable(occt_sdk_consumer main.cpp)
-target_link_libraries(occt_sdk_consumer PRIVATE TKBO TKPrim TKTopAlgo TKDESTEP)
+target_link_libraries(occt_sdk_consumer PRIVATE
+  TKBO
+  TKPrim
+  TKTopAlgo
+  TKDESTEP
+  TKDEIGES
+  TKDESTL
+  TKOffset
+  TKMesh
+)

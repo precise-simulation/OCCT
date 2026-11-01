@@ -6,11 +6,15 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 : "${SOURCE_SHA:?SOURCE_SHA is required}"
+: "${WORKFLOW_SHA:?WORKFLOW_SHA is required}"
 
 asset_root="$(cd "$1" && pwd)"
 short_sha="${SOURCE_SHA:0:12}"
 version="8.0.1"
 prefix="opencascade-$version-macos13"
+root_toolkits='["TKDESTEP","TKDEIGES","TKDESTL","TKOffset","TKMesh"]'
+expected_toolkits='["TKDESTEP","TKDE","TKBRep","TKernel","TKMath","TKXSBase","TKTopAlgo","TKG2d","TKCAF","TKCDF","TKLCAF","TKG3d","TKXCAF","TKShHealing","TKGeomBase","TKGeomAlgo","TKBO","TKPrim","TKService","TKV3d","TKVCAF","TKMesh","TKHLR","TKDEIGES","TKBool","TKDESTL","TKOffset","TKFillet"]'
+expected_toolkits_sorted="$(jq -c 'sort' <<<"$expected_toolkits")"
 
 expected_specs=(
   "x86_64 shared"
@@ -38,8 +42,13 @@ for spec in "${expected_specs[@]}"; do
   test "$expected" = "$actual"
   manifest="$(tar -xOzf "$archive" --wildcards '*/build-manifest.json')"
   test "$(jq -r '.occt.commit' <<<"$manifest")" = "$SOURCE_SHA"
+  test "$(jq -r '.occt.event_sha' <<<"$manifest")" = "$WORKFLOW_SHA"
   test "$(jq -r '.occt.version' <<<"$manifest")" = "$version"
   test "$(jq -r '.artifact.architecture' <<<"$manifest")" = "$architecture"
   test "$(jq -r '.artifact.deployment_target' <<<"$manifest")" = "13.0"
   test "$(jq -r '.linkage' <<<"$manifest")" = "$linkage"
+  test "$(jq -c '.requested_modules' <<<"$manifest")" = "[]"
+  test "$(jq -c '.requested_toolkits' <<<"$manifest")" = "$root_toolkits"
+  test "$(jq -c '.expected_toolkits' <<<"$manifest")" = "$expected_toolkits"
+  test "$(jq -c '.toolkits | sort' <<<"$manifest")" = "$expected_toolkits_sorted"
 done

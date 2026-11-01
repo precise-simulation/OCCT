@@ -1,35 +1,35 @@
 # OCCT SDK release workflow
 
 This directory documents the combined OCCT SDK release process used for
-`occt-sdk-8.0.1` and its shared/static Windows replacement
-`occt-sdk-8.0.1-r2`, adapted from the validated 7.9.3 workflow. The intent is
-to make future OCCT SDK releases reproducible without reconstructing the release
-procedure from workflow history.
+`occt-sdk-8.0.1` and its Windows SDK replacements, adapted from the validated
+7.9.3 workflow. The published `occt-sdk-8.0.1-r2` added a lean Windows static
+SDK. The current template prepares `occt-sdk-8.0.1-r3`, which replaces the full
+upstream Windows shared package with a source-built lean shared SDK and narrows
+the Linux and macOS packages to the same 28-toolkit profile.
 
-The combined release publishes one GitHub release containing qualified SDKs for
-Windows, Linux, and macOS. Linux, macOS, and the lean Windows static SDK use the
-exact upstream OCCT source commit. The Windows shared SDK is copied byte-for-byte
-from the official upstream OCCT release after its identity, size, digest, and
-source tag have been verified.
+The combined release publishes one GitHub release containing qualified lean SDKs
+for Windows, Linux, and macOS. Every package is built from the exact upstream
+OCCT source commit and uses the same geometry/data-exchange toolkit closure.
 
 ## Release architecture
 
-The completed release workflow is retained as
-`.github/occt-sdk-release/release-template.yml`. It is intentionally outside
-`.github/workflows/` after publication so an immutable, version-specific
-release workflow does not remain registered as an active workflow. For a future
-release, copy the template to `.github/workflows/release-occt-sdk.yml`, update
-the release-specific values, validate it, and remove/archive it again after the
-release is immutable.
+The release workflow is retained as `.github/occt-sdk-release/release-template.yml`.
+It is intentionally outside `.github/workflows/` between releases so a
+version-specific workflow does not remain registered as an active workflow. The
+checked-in template currently targets the planned 8.0.1 r3 asset shape. For a
+future release, copy the template to `.github/workflows/release-occt-sdk.yml`,
+update the release-specific values, validate it, and remove/archive it again
+after the release is immutable.
 
-- Linux uses `.github/workflows/build-linux-packages.yml` and produces native
+- Linux uses `.github/workflows/build-linux-packages.yml` and produces lean native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
-- macOS uses `.github/workflows/build-macos-packages.yml` and produces native
+- macOS uses `.github/workflows/build-macos-packages.yml` and produces lean native
   arm64 and x86_64 shared and static SDKs targeting macOS 13.0. There is no
   universal2 package.
-- Windows shared uses the official upstream combined VC x64 Release/no-PCH
-  package. The workflow verifies upstream metadata and recomputes the downloaded
-  package digest locally.
+- Windows shared is a source-built x64 VC143 SDK using the geometry and
+  data-exchange toolkit closure with optional third-party integrations disabled.
+  It is relocated, consumed by an external CMake project, repackaged,
+  re-extracted, and consumed again before upload.
 - Windows static is a lean x64 VC143 SDK built on `windows-2022` from the same
   pinned source commit with optional third-party dependencies disabled. It is
   relocated, consumed by an external CMake project, repackaged, re-extracted, and
@@ -65,9 +65,12 @@ The original immutable 8.0.1 release uses:
 The combined release was published on 2026-10-06. GitHub reports it as immutable,
 and the release tag resolves directly to the workflow commit above.
 
-The current replacement workflow targets `occt-sdk-8.0.1-r2`. It keeps the
-same Linux, macOS, and official Windows shared inputs and adds the qualified lean
-Windows static SDK. The r2 release therefore contains 16 files.
+The immutable `occt-sdk-8.0.1-r2` release keeps the same Linux, macOS, and
+official Windows shared inputs and adds the qualified lean Windows static SDK.
+It contains 16 files. The current release template targets
+`occt-sdk-8.0.1-r3`; it keeps the 16-file inventory while replacing the full
+Windows shared ZIP and narrowing all source-built platform SDKs to the lean
+28-toolkit profile.
 
 ## When upstream publishes the next OCCT release
 
@@ -111,9 +114,9 @@ gh api repos/Open-Cascade-SAS/OCCT/contents/adm/cmake/version.cmake?ref=master \
 ```
 
 Once a new release exists, follow the porting procedure below. In particular,
-re-audit all copied CMake variables and the Windows static toolkit closure against
-the new source. Do not assume that the 8.0.1 option names, toolkit dependencies,
-system-library requirements, or upstream Windows asset metadata remain valid.
+re-audit all copied CMake variables and the lean toolkit closure against the new
+source. Do not assume that the 8.0.1 option names, toolkit dependencies, or
+system-library requirements remain valid.
 
 ## Porting the fork to a new upstream OCCT release
 
@@ -274,26 +277,20 @@ workflows, determine all of the following:
 1. OCCT version, for example `8.0.1`.
 2. Upstream GitHub Release tag, for example `V8.0.1`.
 3. The commit to which that upstream tag resolves after peeling annotated tags.
-4. The exact official Windows combined x64 Release asset name.
-5. The Windows asset byte size and SHA-256 reported by the upstream release.
-6. The release branch in this fork, for example `OCCT-801`.
+4. The release branch in this fork, for example `OCCT-801`.
 
 Useful checks are:
 
 ```bash
 git ls-remote --tags https://github.com/Open-Cascade-SAS/OCCT.git \
   refs/tags/V8.0.1 'refs/tags/V8.0.1^{}'
-
-gh api repos/Open-Cascade-SAS/OCCT/releases/tags/V8.0.1 \
-  --jq '.assets[] | [.name, .size, .digest, .browser_download_url] | @tsv'
 ```
 
 For an annotated upstream tag, use the peeled `^{}` commit. For a lightweight
 tag, the tag ref itself is already the commit.
 
-Do not infer the Windows filename, size, or digest from an older release. Read
-them from the new upstream release and verify that the selected upstream tag
-resolves to the same source commit used by Linux and macOS.
+Verify that the selected upstream tag resolves to the same source commit pinned
+by every platform producer.
 
 ## Version update checklist
 
@@ -326,9 +323,9 @@ In `.github/workflows/build-windows-packages.yml`:
 
 - change the push branch to the new release branch;
 - change `OCCT_VERSION` and `OCCT_SOURCE_SHA`;
-- update the exact official Windows shared asset name, size, SHA-256, URL, and
-  upstream release-tag URLs;
-- review the Windows runner/toolchain and the lean static toolkit closure;
+- review the Windows runner/toolchain and the lean shared/static toolkit closure;
+- keep the lean shared dependency exclusion list, relocation checks, and manifest
+  expectations in sync with the release verifier;
 - keep the static external-consumer definitions
   `OCCT_STATIC_BUILD;OCCT_NO_PLUGINS` and required Windows system libraries in
   sync with the manifest and release verifier.
@@ -361,16 +358,11 @@ update:
   suffix such as `-r2` when replacing an already-published immutable release;
 - `OCCT_VERSION`;
 - `OCCT_SOURCE_SHA`;
-- `WINDOWS_ASSET`;
-- `WINDOWS_ASSET_SIZE`;
-- `WINDOWS_ASSET_SHA256`;
-- `WINDOWS_ASSET_URL`;
-- both occurrences of the upstream tag URL;
-- the `SOURCE_SHA` and `WINDOWS_SHA256` values in the publish job;
-- the Windows release description if the upstream package/toolchain name changed.
+- the `SOURCE_SHA` value in the publish job;
+- the platform descriptions if the package/toolchain contract changed.
 
 In `.github/occt-sdk-release/verify-release-assets.sh`, update the exact Windows
-shared and static asset names, static manifest expectations, and total inventory
+lean-shared and static asset names, manifest expectations, and total inventory
 when the package shape changes.
 
 After editing, search for stale release-specific values. For example:
@@ -405,12 +397,13 @@ At minimum:
    runtime/glibc environment.
 4. Confirm the macOS producer builds and consumes all four native combinations:
    arm64/shared, arm64/static, x86_64/shared, and x86_64/static.
-5. Confirm the Windows workflow verifies the official shared package and builds,
-   relocates, packages, re-extracts, and consumes the lean static SDK.
+5. Confirm the Windows workflow builds, relocates, packages, re-extracts, and
+   consumes both the lean shared and lean static SDKs.
 6. Confirm manifests contain the exact upstream source SHA and version.
 7. Confirm relocation tests pass. The resulting SDKs must not depend on the
    original runner workspace, build tree, Xcode path, or SDK path.
-8. Verify the Windows upstream shared-asset metadata before tagging.
+8. Confirm the Windows shared DLL dependency scan rejects every disabled optional
+   runtime family.
 
 While the combined workflow is installed under `.github/workflows/`, it can
 also be started with `workflow_dispatch` as an end-to-end preflight. Its publish
@@ -453,8 +446,7 @@ Pushing the exact configured tag starts
 
 1. builds and qualifies the Linux SDKs;
 2. builds and qualifies the four macOS SDKs;
-3. verifies the official Windows shared package and builds/qualifies the lean
-   Windows static SDK;
+3. builds and qualifies the lean Windows shared and static SDKs;
 4. verifies the combined inventory;
 5. creates a draft GitHub Release;
 6. verifies all uploaded GitHub asset digests while still a draft;
@@ -469,10 +461,11 @@ the active one-shot workflow) and commit that cleanup.
 
 ## Expected release inventory
 
-The r2 release shape contains exactly 16 files:
+The current r3 template expects exactly 16 files, the same count as immutable r2.
+The Windows shared pair changes identity from the upstream full package to the
+source-built lean package.
 
-- Windows: 1 official shared ZIP + checksum and 1 lean static ZIP + checksum =
-  4 files.
+- Windows: 1 lean shared ZIP + checksum and 1 lean static ZIP + checksum = 4 files.
 - Linux: shared and static `.tar.gz` archives + 2 `.sha256` files = 4 files.
 - macOS: arm64/x86_64 × shared/static archives + 4 `.sha256` files = 8 files.
 
@@ -488,22 +481,60 @@ macOS package names follow:
 opencascade-X.Y.Z-macos13-{arm64|x86_64}-{shared|static}-<source-sha12>.tar.gz
 ```
 
-The source-built Windows static package name follows:
+The source-built lean Windows package names follow:
 
 ```text
+opencascade-X.Y.Z-windows-x86_64-vc143-shared-lean-<source-sha12>.zip
 opencascade-X.Y.Z-windows-x86_64-vc143-static-lean-<source-sha12>.zip
 ```
 
-Its manifest records the consumer compile definitions
+The shared manifest records the production optimization profile, exact toolkit
+closure, and `optional-third-party=none`. The static manifest additionally
+records the consumer compile definitions
 `OCCT_STATIC_BUILD;OCCT_NO_PLUGINS` and the Windows system libraries required
-by the lean toolkit closure. The validation workflow uses those settings for an
-external CMake consumer before and after packaging.
+by the lean toolkit closure. The validation workflow consumes each source-built
+SDK before and after packaging.
+
+## Windows lean shared SDK implementation
+
+The r3 producer replaces the upstream full shared ZIP with a source-built shared
+SDK for consumers that want the same small geometry/data-exchange surface as the
+lean static SDK without static OCCT linkage.
+
+The lean shared producer uses the pinned upstream OCCT source, `windows-2022`,
+Visual Studio 2022 x64 Release, `BUILD_LIBRARY_TYPE=Shared`, the production OCCT
+optimization profile, precompiled headers disabled, and the native memory
+manager. It forces CMake policy `CMP0091=NEW` and verifies the generated toolkit
+projects encode `MultiThreadedDLL`, so the VC143 `/MD` ABI contract is checked
+before compilation. It disables the broad OCCT modules and explicitly requests
+`TKDESTEP;TKDEIGES;TKDESTL;TKOffset;TKMesh`, producing the same exact 28-toolkit
+closure documented for the static package below. `TKDECascade` is rejected.
+
+Freetype, FreeImage, FFmpeg, OpenVR, RapidJSON, Draco, TBB, Eigen, Tcl, Tk, VTK,
+OpenGL, GLES2, and D3D are disabled and `3RDPARTY_DIR` is empty. The installed
+SDK must contain exactly 28 `TK*.dll` files and matching 28 `TK*.lib` import
+libraries. Every toolkit DLL is inspected with `dumpbin /dependents`; imports of
+the disabled optional integrations are rejected.
+
+The shared SDK is copied to a new location and consumed through its installed
+`OpenCASCADEConfig.cmake`. The external consumer requires the package to report
+`OpenCASCADE_BUILD_SHARED_LIBS=ON`, verifies that the exported binary, library,
+include, and resource directories remain inside the relocated prefix, builds a
+box, exercises offsetting and meshing, round-trips STEP and IGES, writes/reads
+STL, and runs with the relocated OCCT binary directory on `PATH`. After
+packaging, the ZIP is extracted into another fresh location and the same
+configure/build/run check is repeated after the original build/install trees
+have been moved out of their recorded paths. The final
+executable must import OCCT DLLs including `TKernel.dll` and `TKDESTEP.dll`, and
+every imported `TK*.dll` must exist in the extracted package.
 
 ## Windows static SDK implementation
 
 Linux and macOS already publish both shared and static SDK variants. The specific
 addition made for `occt-sdk-8.0.1-r2` was the Windows static SDK described in
-this section; the official upstream Windows ZIP remains the shared Windows SDK.
+this section; r2 still uses the official upstream Windows ZIP for shared linkage.
+The planned r3 release replaces that shared package with the lean source-built
+variant described above while retaining the lean static contract here.
 
 The Windows static package in `occt-sdk-8.0.1-r2` is intentionally not a
 static rebuild of every optional OCCT component. It is a **lean static SDK**
@@ -519,7 +550,8 @@ The Windows static producer uses:
   by Linux/macOS and corresponding to upstream `V8.0.1`;
 - `windows-2022`, Visual Studio 2022, x64, Release configuration;
 - `BUILD_LIBRARY_TYPE:STRING=Static`;
-- `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`, i.e. OCCT itself is linked
+- `CMP0091=NEW` plus `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`, with the
+  generated toolkit projects checked for `MultiThreadedDLL`; OCCT itself is linked
   statically but uses the dynamic MSVC runtime (`/MD`), not the static CRT
   (`/MT`);
 - `BUILD_OPT_PROFILE=Default`;
@@ -675,20 +707,22 @@ The Windows static artifact is accepted only after all of the following pass:
    `/MD` runtime contract;
 4. copy the installed SDK to a different directory to prove it is relocatable;
 5. configure an external CMake consumer using only the relocated install;
-6. build a small executable that creates a box with
-   `BRepPrimAPI_MakeBox` and writes it through `STEPControl_Writer`;
-7. run that executable and require the STEP file to be produced;
+6. build a small executable that creates and offsets geometry, meshes it, and
+   round-trips STEP, IGES, and STL so the five lean root toolkit families are
+   exercised from the relocated package;
+7. run that executable and require every operation to succeed;
 8. package the SDK, manifest, licenses, and checksum into the final ZIP;
 9. extract that ZIP into another fresh location and repeat the external consumer
    configure/build/run;
 10. inspect the final consumer executable with `dumpbin /dependents` and reject
     any dependency matching `TK*.dll`.
 
-The successful final Windows qualification was GitHub Actions run
-`37910758624`. The final executable therefore demonstrated real static OCCT
-linkage rather than merely producing `.lib` files.
+The r2 static qualification was GitHub Actions run `37910758624`; its final
+executable demonstrated real static OCCT linkage rather than merely producing
+`.lib` files. The expanded r3 root-family consumer and the new lean shared build
+must be qualified again on GitHub Actions before the r3 tag is created.
 
-Every archive has an adjacent `.sha256` file. The release workflow rejects
+Every archive has an adjacent `.sha256` file. The r3 release workflow rejects
 missing files, extra files, checksum failures, source/version mismatches, and an
 asset count other than 16.
 
@@ -707,10 +741,10 @@ If a tag-triggered run fails before publication:
 Example:
 
 ```bash
-git push origin :refs/tags/occt-sdk-8.0.1-r2
-git tag -d occt-sdk-8.0.1-r2
-git tag occt-sdk-8.0.1-r2 <fixed-workflow-commit>
-git push origin refs/tags/occt-sdk-8.0.1-r2
+git push origin :refs/tags/occt-sdk-8.0.1-r3
+git tag -d occt-sdk-8.0.1-r3
+git tag occt-sdk-8.0.1-r3 <fixed-workflow-commit>
+git push origin refs/tags/occt-sdk-8.0.1-r3
 ```
 
 Never reuse or move a tag after its release has been successfully published.
@@ -724,7 +758,7 @@ After the workflow succeeds, verify through the GitHub API/UI that:
 
 - the release is non-draft and non-prerelease unless intentionally configured
   otherwise;
-- the tag is the expected release tag (currently `occt-sdk-8.0.1-r2`);
+- the tag is the expected release tag (currently `occt-sdk-8.0.1-r3`);
 - there are exactly 16 release assets;
 - the published release is immutable;
 - Linux/macOS filenames contain the expected 12-character source SHA prefix;
@@ -755,9 +789,10 @@ Keep these properties when adapting the workflow:
   compatibility distributions.
 - Build each macOS architecture natively and consume the packaged result after
   relocation.
-- Treat the official Windows shared package as provenance-sensitive input:
-  verify its upstream tag, source commit, filename, size, URL, and SHA-256 before
-  copying it.
+- Build the lean Windows shared SDK from the same pinned source and 28-toolkit
+  closure, keep optional third-party integrations disabled, inspect toolkit DLL
+  dependencies, and validate a relocated external consumer both before and after
+  packaging.
 - Build the Windows static SDK from the same pinned source, keep its optional
   third-party surface explicit, and validate a relocated external consumer both
   before and after packaging. Until upstream OCCT exports the static compile

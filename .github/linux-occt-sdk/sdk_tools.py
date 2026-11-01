@@ -22,7 +22,44 @@ LEAK_PATHS = (
 OPTIONAL_DEP_RE = re.compile(
     r"(libGL|libEGL|libGLES|libX11|libXmu|libfreetype|libfontconfig|libfreeimage|"
     r"libtbb|libvtk|libtcl|libtk8|libopenvr|libdraco|libavcodec|libavformat|"
-    r"libswscale|libavutil)", re.IGNORECASE
+    r"libavdevice|libavfilter|libswscale|libswresample|libavutil|libjemalloc)", re.IGNORECASE
+)
+LEAN_ROOT_TOOLKITS = (
+    "TKDESTEP",
+    "TKDEIGES",
+    "TKDESTL",
+    "TKOffset",
+    "TKMesh",
+)
+EXPECTED_TOOLKITS = (
+    "TKDESTEP",
+    "TKDE",
+    "TKBRep",
+    "TKernel",
+    "TKMath",
+    "TKXSBase",
+    "TKTopAlgo",
+    "TKG2d",
+    "TKCAF",
+    "TKCDF",
+    "TKLCAF",
+    "TKG3d",
+    "TKXCAF",
+    "TKShHealing",
+    "TKGeomBase",
+    "TKGeomAlgo",
+    "TKBO",
+    "TKPrim",
+    "TKService",
+    "TKV3d",
+    "TKVCAF",
+    "TKMesh",
+    "TKHLR",
+    "TKDEIGES",
+    "TKBool",
+    "TKDESTL",
+    "TKOffset",
+    "TKFillet",
 )
 
 
@@ -87,6 +124,32 @@ def exported_modules(prefix: pathlib.Path):
     config = (prefix / "lib/cmake/opencascade/OpenCASCADEConfig.cmake").read_text(errors="replace")
     match = re.search(r"set \(OpenCASCADE_MODULES ([^)]+)\)", config)
     return match.group(1).replace(";", " ").split() if match else []
+
+
+def exported_toolkits(prefix: pathlib.Path):
+    config = (prefix / "lib/cmake/opencascade/OpenCASCADEConfig.cmake").read_text(errors="replace")
+    match = re.search(r"set \(OpenCASCADE_LIBRARIES ([^)]+)\)", config)
+    return match.group(1).replace(";", " ").split() if match else []
+
+
+def require_toolkit_closure(prefix: pathlib.Path, linkage: str):
+    expected = set(EXPECTED_TOOLKITS)
+    observations = {
+        "packaged libraries": toolkit_names(prefix, linkage),
+        "OpenCASCADE_LIBRARIES": exported_toolkits(prefix),
+    }
+    for label, names in observations.items():
+        require(names, f"no OCCT toolkits found in {label}")
+        require(len(names) == len(set(names)), f"duplicate OCCT toolkits in {label}: {names}")
+        require("TKDECascade" not in names, f"TKDECascade is forbidden in lean profile {label}")
+        observed = set(names)
+        missing = sorted(expected - observed)
+        unexpected = sorted(observed - expected)
+        require(
+            not missing and not unexpected,
+            f"lean OCCT toolkit closure mismatch in {label}: missing={missing}, unexpected={unexpected}, observed={sorted(observed)}",
+        )
+    return observations
 
 
 def normalize_build_path(value: str, prefix: pathlib.Path) -> str:
@@ -190,6 +253,7 @@ def make_manifest(args):
     consumer = pathlib.Path(args.consumer).resolve()
     consumer_link = pathlib.Path(args.consumer_link)
     shared = real_shared_objects(prefix) if args.linkage == "shared" else []
+    toolkit_closure = require_toolkit_closure(prefix, args.linkage)
     cmake_options = {
         "requested": requested_cmake_options(pathlib.Path(args.configure_options), prefix),
         "resolved_cache": resolved_cmake_options(pathlib.Path(args.cmake_cache), prefix),
@@ -210,15 +274,12 @@ def make_manifest(args):
         },
         "linkage": args.linkage,
         "cmake_options": cmake_options,
-        "requested_modules": [
-            "FoundationClasses",
-            "ModelingData",
-            "ModelingAlgorithms",
-            "ApplicationFramework",
-            "DataExchange",
-        ],
+        "requested_modules": [],
+        "requested_toolkits": list(LEAN_ROOT_TOOLKITS),
+        "expected_toolkits": list(EXPECTED_TOOLKITS),
         "exported_modules": exported_modules(prefix),
-        "toolkits": toolkit_names(prefix, args.linkage),
+        "exported_toolkits": toolkit_closure["OpenCASCADE_LIBRARIES"],
+        "toolkits": toolkit_closure["packaged libraries"],
         "symbol_versions": {
             "shared_objects": symbol_maxima(shared) if shared else None,
             "consumer": symbol_maxima([consumer]),
@@ -256,11 +317,7 @@ def validate_prefix(args):
     require((prefix / "include/opencascade/Standard_Version.hxx").is_file(), "missing Standard_Version.hxx")
     require((prefix / "lib/cmake/opencascade/OpenCASCADEConfig.cmake").is_file(), "missing OpenCASCADEConfig.cmake")
     require((prefix / "bin/env.sh").is_file(), "missing bin/env.sh")
-    for toolkit in ("TKernel", "TKBO", "TKDESTEP", "TKV3d", "TKService"):
-        if args.linkage == "static":
-            require((prefix / "lib" / f"lib{toolkit}.a").is_file(), f"missing static {toolkit}")
-        else:
-            require(any((prefix / "lib").glob(f"lib{toolkit}.so*")), f"missing shared {toolkit}")
+    require_toolkit_closure(prefix, args.linkage)
     env_text = (prefix / "bin/env.sh").read_text(errors="replace")
     require('export THIRDPARTY_DIR=""' in env_text, "env.sh has non-empty THIRDPARTY_DIR fallback")
     scan_leaks(prefix)
