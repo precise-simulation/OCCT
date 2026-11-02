@@ -1,8 +1,10 @@
-# Last known-good release workflow for immutable occt-sdk-8.0.1-r3.
-# Before reuse, copy this file to .github/workflows/release-occt-sdk.yml and
-# update every release-specific value, including the tag, version, source SHA,
-# and asset expectations. Commit that active workflow before preflight/tagging,
-# then archive/remove it again after the new release is immutable.
+# Version-specific recovery example derived from immutable occt-sdk-8.0.1-r3.
+# This is not a byte-for-byte historical snapshot of the r3 workflow: it uses
+# the reusable producer workflows from whichever automation revision executes it.
+# Normal releases are detected, qualified, and published by
+# .github/workflows/build-latest-occt-sdk.yml. If this template is deliberately
+# reused for a replacement/recovery release, update every release-specific value,
+# including the tag, version, source SHA, and asset expectations before use.
 name: Release OCCT SDK bundle
 
 on:
@@ -84,6 +86,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+          sparse-checkout: .github
 
       # actions/download-artifact v4.3.0
       - name: Download Linux SDKs

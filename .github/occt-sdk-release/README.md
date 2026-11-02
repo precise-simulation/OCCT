@@ -11,16 +11,24 @@ The combined release publishes one GitHub release containing qualified lean SDKs
 for Windows, Linux, and macOS. Every package is built from the exact upstream
 OCCT source commit and uses the same geometry/data-exchange toolkit closure.
 
+The default branch is intentionally automation-only. It does not carry a live
+OCCT source tree: each producer sparse-checks out this repository's `.github/`
+automation and checks out `Open-Cascade-SAS/OCCT` separately at the exact
+upstream source SHA selected by the release workflow.
+
 ## Release architecture
 
-The release workflow is retained as `.github/occt-sdk-release/release-template.yml`.
-It is intentionally outside `.github/workflows/` between releases so a
-version-specific workflow does not remain registered as an active workflow. The
-checked-in template is the last known-good workflow from the published 8.0.1 r3
-release and intentionally retains its r3-specific values. For a future release,
-copy the template to `.github/workflows/release-occt-sdk.yml`, update every
-release-specific value, validate it, and remove/archive it again after the
-release is immutable.
+The live release workflow is `.github/workflows/build-latest-occt-sdk.yml` on the
+default branch. It detects a new stable upstream GitHub Release, builds all three
+platform families from the exact upstream source commit, qualifies the complete
+16-file candidate, and publishes the combined SDK release only after every check
+passes. Routine releases do not require installing or editing a version-specific
+`.github/workflows/release-occt-sdk.yml`.
+
+`.github/occt-sdk-release/release-template.yml` is a version-specific recovery
+example derived from immutable `occt-sdk-8.0.1-r3`. It is not an exact historical
+snapshot: its reusable producer calls resolve from the automation revision that
+executes it. The automatic release path does not execute or copy it.
 
 - Linux uses `.github/workflows/build-linux-packages.yml` and produces lean native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
@@ -35,9 +43,11 @@ release is immutable.
   pinned source commit with optional third-party dependencies disabled. It is
   relocated, consumed by an external CMake project, repackaged, re-extracted, and
   consumed again before upload.
-- The publish job downloads all producer artifacts, verifies the exact inventory
-  and adjacent checksums, creates a draft release, verifies GitHub's uploaded
-  asset digests, and only then publishes it. The final release must be immutable.
+- The publish job downloads all producer artifacts, verifies the exact 16-file
+  SDK inventory and adjacent checksums, creates an exact-SHA upstream source
+  archive plus checksum, creates a draft release, verifies GitHub's uploaded
+  asset digests for all 18 files, and only then publishes it. The final release
+  must be immutable.
 
 The release tag identifies the **workflow revision**, while every source-built
 SDK independently pins the official OCCT release commit.
@@ -51,7 +61,6 @@ The original immutable 8.0.1 release uses:
 | Item | Value |
 | --- | --- |
 | Combined release tag | `occt-sdk-8.0.1` |
-| Release branch | `OCCT-801` |
 | Workflow commit used by the release | `07a7e05ffcd3cec81e0ed37afdf61b2e35047178` |
 | Upstream OCCT tag | `V8.0.1` |
 | Upstream OCCT source commit | `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` |
@@ -74,8 +83,9 @@ The immutable `occt-sdk-8.0.1-r3` release was published on 2026-11-01 from
 workflow commit `39db8383d636fa90504dad663f51e9001508eeb9`. It keeps the
 16-file inventory while replacing the full Windows shared ZIP with the
 source-built lean shared SDK and narrowing all source-built platform SDKs to the
-same 28-toolkit profile. The retained release template is the r3 workflow kept
-as the starting point for the next release port.
+same 28-toolkit profile. The retained r3-derived template is a manual recovery
+example, not an exact historical snapshot; future normal releases use the live
+automatic workflow instead.
 
 ## When upstream publishes the next OCCT release
 
@@ -88,48 +98,55 @@ repository directly, so a new source release no longer has to be imported into
 this fork before it can be qualified.
 
 If every platform build and relocated consumer test passes, the workflow verifies
-the full 16-file release inventory, re-resolves the upstream tag to make sure it
+the full 16-file SDK candidate inventory, re-resolves the upstream tag to make sure it
 did not move during the build, and uploads candidate metadata alongside the
-platform workflow artifacts. It does **not** create an SDK tag or GitHub Release.
-The exact lean toolkit closure, system-library requirements, and producer
-baselines remain a release-specific compatibility contract that should be
-reviewed when upstream changes.
+platform workflow artifacts. For a genuinely new upstream version on the default
+branch, a final publish job then re-downloads those same run artifacts, repeats
+the inventory/source checks, archives the exact upstream source commit with an
+adjacent SHA-256 checksum, creates lightweight `occt-sdk-X.Y.Z` at the exact
+automation revision, creates a draft GitHub Release, verifies every uploaded
+GitHub asset digest, publishes the release, and requires GitHub to report it as
+immutable. The exact lean toolkit closure, system-library requirements, and
+producer baselines remain a release-specific compatibility contract; incompatible
+upstream changes fail before publication.
 
-The workflow has a weekly schedule and can also be run manually for an exact
+The workflow polls daily at 06:17 UTC and can also be run manually for an exact
 stable upstream tag. GitHub requires both scheduled and manually dispatched
 workflows to exist on the repository's default branch. This fork's default branch
-is `master`, so candidate qualification becomes available only after the SDK
-automation layer (the reusable builders, helpers, and
-`build-latest-occt-sdk.yml`) is present on `master`.
+is `master`. Automatic publication is additionally gated to the default branch,
+so dispatching the workflow from another branch can qualify a candidate but
+cannot create a tag or release.
 
 Manual runs also expose `force_qualify`. This is intended for validating the
 automation against an already-published known-good release (for example 8.0.1)
 or deliberately re-running qualification after automation changes. It does not
-bypass the source-SHA provenance check.
+bypass the source-SHA provenance check, and it never republishes an existing SDK
+version.
 
-An existing SDK release with tag `occt-sdk-X.Y.Z` (or an immutable replacement
-such as `occt-sdk-X.Y.Z-r2`) suppresses another automatic build for that upstream
-version, but only when its release notes record the same exact upstream source
-SHA. A source mismatch is treated as a possible upstream retag/provenance problem
-and fails closed. Suffixes such as `-rc1` are not treated as immutable replacement
-releases. If a new release fails qualification, fix the automation/profile and
-rerun it.
+An existing published, non-prerelease, immutable SDK release with tag
+`occt-sdk-X.Y.Z` (or an immutable replacement such as `occt-sdk-X.Y.Z-r2`)
+suppresses another automatic build for that upstream version, but only when every
+matching release records the same exact upstream source SHA. A stale draft,
+mutable/prerelease state, or source mismatch is treated as an incomplete or
+provenance-sensitive release state and fails closed. Suffixes such as `-rc1` are
+not treated as immutable replacement releases. If a new release fails
+qualification, fix the automation/profile and rerun it.
 
 Do not create a new fork release branch from upstream `master` merely because
 the development version has advanced. The SDK branches and releases in this fork
 are intended to correspond to identifiable upstream release tags.
 
-As of 2026-10-09, the latest upstream stable GitHub Release is `V8.0.1`.
+As of 2026-11-02, the latest upstream stable GitHub Release is `V8.0.1`.
 Upstream `master` identifies itself as `8.1.0-dev1`, so 8.1 is the next
 development line but is not yet a stable release to package.
 
-For automatic candidate qualification, the normal policy is:
+For automatic qualification and publication, the normal policy is:
 
 1. Wait for a new upstream GitHub Release/tag.
 2. Prefer the final stable release for a durable SDK release.
-3. Only create a beta/RC SDK branch when there is a concrete need to qualify a
-   prerelease before the stable tag; keep such releases clearly marked as
-   prereleases.
+3. Keep automatic publication limited to final stable upstream releases.
+   Prerelease qualification is a separate deliberate process and must not reuse
+   the stable-release publication path implicitly.
 4. Read the GitHub Release's actual `tag_name`; do not derive the tag from its
    display name. For example, the 8.0.1 release name is `V8_0_1` while its
    actual tag is `V8.0.1`.
@@ -138,11 +155,6 @@ For automatic candidate qualification, the normal policy is:
 6. Let the existing lean-profile checks decide whether the release still matches
    the qualified SDK contract. If it does not, update the profile/toolchain
    assumptions deliberately and rerun qualification.
-
-The branch-based porting procedure below is still useful when a durable fork
-branch is wanted for source history or additional OCCT changes, but creating that
-branch is no longer a prerequisite for building and qualifying an upstream SDK
-candidate.
 
 Useful release-state checks are:
 
@@ -158,182 +170,21 @@ gh api repos/Open-Cascade-SAS/OCCT/contents/adm/cmake/version.cmake?ref=master \
   base64 --decode
 ```
 
-Once a new release exists, follow the porting procedure below. In particular,
-re-audit all copied CMake variables and the lean toolkit closure against the new
-source. Do not assume that the 8.0.1 option names, toolkit dependencies, or
-system-library requirements remain valid.
-
-## Porting the fork to a new upstream OCCT release
-
-Create each new release branch from the exact upstream OCCT release commit, then
-carry forward the fork-owned SDK layer. `OCCT-801` uses this layout: the official
-`V8.0.1` commit `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` is the branch base,
-followed by the fork's SDK commits. Keeping the upstream commit as the branch base
-makes source identity and the fork-specific delta easy to prove.
-
-### 1. Fetch and verify the upstream release
-
-Configure the official repository as `upstream` once. If that remote already
-exists, verify its URL before using it.
-
-```bash
-git remote -v
-git remote add upstream https://github.com/Open-Cascade-SAS/OCCT.git
-```
-
-For each release, fetch the exact release tag and resolve it immediately to a
-commit. Use the tag spelling published by the upstream GitHub Release; do not
-assume that dots and underscores are interchangeable.
-
-```bash
-previous_branch=OCCT-801
-new_branch=OCCT-XYZ
-upstream_tag=VX.Y.Z
-
-git fetch --no-tags origin "refs/heads/$previous_branch"
-previous_sdk_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
-printf 'previous SDK commit: %s\n' "$previous_sdk_sha"
-
-git fetch --no-tags upstream "refs/tags/$upstream_tag"
-source_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
-printf '%s\n' "$source_sha"
-
-git ls-remote --tags upstream \
-  "refs/tags/$upstream_tag" "refs/tags/$upstream_tag^{}"
-```
-
-The first fetch pins the previous fork SDK state to the current remote branch
-head, so a stale local branch cannot silently supply old helpers. For an
-annotated upstream tag, `source_sha` must equal the peeled `^{}` commit. For
-a lightweight tag, it must equal the tag ref itself. Cross-check the same commit
-against the upstream GitHub Release before continuing.
-
-### 2. Create the release branch at that exact commit
-
-Create the new fork release branch directly from `source_sha`.
-
-```bash
-git switch --create "$new_branch" "$source_sha"
-test "$(git rev-parse HEAD)" = "$source_sha"
-```
-
-The SDK layer currently lives only in these fork-owned paths:
-
-```text
-.github/linux-occt-sdk/
-.github/macos-occt-sdk/
-.github/windows-occt-sdk/
-.github/occt-sdk-release/
-.github/workflows/build-linux-packages.yml
-.github/workflows/build-macos-packages.yml
-.github/workflows/build-windows-packages.yml
-.github/workflows/validate-lean-profile.yml
-```
-
-Before copying them, check whether the new upstream release has introduced any
-file at those paths:
-
-```bash
-sdk_paths=(
-  .github/linux-occt-sdk
-  .github/macos-occt-sdk
-  .github/windows-occt-sdk
-  .github/occt-sdk-release
-  .github/workflows/build-linux-packages.yml
-  .github/workflows/build-macos-packages.yml
-  .github/workflows/build-windows-packages.yml
-  .github/workflows/validate-lean-profile.yml
-)
-
-git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
-```
-
-The expected output is empty with the current repository layout. If upstream now
-owns any of those paths, remove each colliding path from `sdk_paths` before the
-restore below. Carry the non-colliding paths forward with the restore, then merge
-each colliding path separately so the new upstream content remains part of the
-result.
-
-Copy the pinned SDK state from the previous release branch:
-
-```bash
-git restore --source="$previous_sdk_sha" -- "${sdk_paths[@]}"
-```
-
-Before changing version fields, audit the copied OCCT-specific CMake options
-against the new upstream release. List the options passed by both producers:
-
-```bash
-rg -n -- '-D(BUILD|USE|INSTALL|3RDPARTY)_[A-Za-z0-9_]*=' \
-  .github/linux-occt-sdk/build-sdk.sh \
-  .github/macos-occt-sdk/build-sdk.sh \
-  .github/workflows/build-windows-packages.yml
-```
-
-Verify each option against the new upstream `CMakeLists.txt` and `adm/cmake`
-implementation, and review the first producer configure output for unused
-variables. Treat a CMake warning that a manually specified OCCT variable was not
-used as a porting failure until the copied option is removed or replaced. The
-8.0.1 port required removing the obsolete `BUILD_MODULE_DETools` and
-`BUILD_Inspector` options, so this audit is part of every release port.
-
-After deciding the new lean roots, closure, and common disabled options, update
-`.github/occt-sdk-release/lean-profile.json` and run
-`python3 .github/occt-sdk-release/check-lean-profile.py`. The platform
-producers intentionally keep self-contained copies; the checker proves those
-copies still match the canonical cross-platform contract.
-
-Then perform the version/source/asset updates in the checklist below. Port the
-final validated SDK state rather than replaying the full history of the previous
-release branch.
-
-### 3. Verify the port before pushing
-
-After the version-specific edits are complete, stage the intended SDK paths so
-new files absent from the upstream index are included in the review. Stage any
-deliberate compatibility files outside these paths explicitly as well.
-
-```bash
-git status --short
-git add -- "${sdk_paths[@]}"
-git diff --cached --check
-git diff --cached --name-status "$source_sha"
-git diff --cached "$source_sha"
-```
-
-After committing the port, verify the ancestry and committed delta:
-
-```bash
-test "$(git merge-base "$source_sha" HEAD)" = "$source_sha"
-git log --merges --oneline "$source_sha"..HEAD
-git diff --name-status "$source_sha"..HEAD
-```
-
-The merge log should be empty for the normal release-port path. The diff should
-contain the SDK paths above plus only deliberate, reviewed compatibility changes
-needed by the new OCCT release. Keep any required OCCT source patch as a separate,
-clearly named fork commit so it remains visible in this review.
-
-Push the new release branch only after these checks and the version update
-checklist are complete:
-
-```bash
-git push -u origin "$new_branch"
-```
-
-This branch becomes the input for the producer validation and combined release
-steps below.
+Once a new release exists, the automation builds that upstream commit directly.
+If qualification fails, re-audit the configured CMake variables, toolkit closure,
+and system-library assumptions against the new upstream source. Do not assume
+that the 8.0.1 compatibility contract remains valid.
 
 ## Preparing a future version
 
-Use the upstream stable release as the source of truth. Before editing the
-workflows, determine all of the following:
+Use the upstream stable release as the source of truth. Routine stable releases
+do not require a source import or a per-release branch. If qualification exposes
+a compatibility change, verify all of the following before editing the profile
+or platform baselines:
 
 1. OCCT version, for example `8.0.1`.
 2. Upstream GitHub Release tag, for example `V8.0.1`.
 3. The commit to which that upstream tag resolves after peeling annotated tags.
-4. If a per-release fork branch is still wanted, its name, for example
-   `OCCT-801`. The automatic candidate build does not require one.
 
 Useful checks are:
 
@@ -354,14 +205,13 @@ The automatic candidate workflow supplies the detected version and exact source
 SHA as workflow inputs, so routine upstream releases no longer require changing
 version strings throughout the producer helpers. The `8.0.1` values retained as
 defaults in the reusable workflows are the baseline used when those workflows
-run directly from the current release branch.
+run directly from the automation branch.
 
 ### Producer workflows
 
 In `.github/workflows/build-linux-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the manylinux producer image tag/digest and glibc baseline. Keep the
@@ -369,8 +219,7 @@ In `.github/workflows/build-linux-packages.yml`:
 
 In `.github/workflows/build-macos-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the macOS runner labels, Xcode pin, CMake pin, and deployment target.
@@ -378,8 +227,7 @@ In `.github/workflows/build-macos-packages.yml`:
 
 In `.github/workflows/build-windows-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the Windows runner/toolchain and the lean shared/static toolkit closure;
@@ -414,15 +262,19 @@ manifest validation.
 
 ### Combined release workflow
 
-Copy `.github/occt-sdk-release/release-template.yml` to
-`.github/workflows/release-occt-sdk.yml` for the release being prepared, then
-update:
+The normal combined release path is `.github/workflows/build-latest-occt-sdk.yml`.
+It derives `OCCT_VERSION`, `OCCT_SOURCE_SHA`, the upstream tag, and the SDK
+release tag from the stable upstream GitHub Release at runtime. There is no
+per-release workflow file to install and no version/source pin to edit for a
+routine new upstream release.
 
-- the exact tag trigger. Use `occt-sdk-X.Y.Z` for a normal new release; use a
-  suffix such as `-r2` when replacing an already-published immutable release;
-- `OCCT_VERSION`;
-- `OCCT_SOURCE_SHA`;
-- the platform descriptions if the package/toolchain contract changed.
+The retained `.github/occt-sdk-release/release-template.yml` is intentionally
+bound to the 8.0.1 r3 release shape, but it is only a recovery example derived
+from that release. It invokes reusable producers from the revision that executes
+it and therefore is not a self-contained reproduction of r3. Use it only when
+deliberately preparing a manual replacement/recovery workflow; in that
+exceptional case every tag, version, source SHA, producer revision, and package
+expectation must be reviewed before use.
 
 In `.github/occt-sdk-release/verify-release-assets.sh`, update the exact Windows
 lean-shared and static asset names, manifest expectations, and total inventory
@@ -431,29 +283,32 @@ when the package shape changes.
 After editing, search for stale release-specific values. For example:
 
 ```bash
-rg -n '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
+rg -n --glob '!release-template.yml' \
+  '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
   .github/linux-occt-sdk \
   .github/macos-occt-sdk \
   .github/occt-sdk-release \
   .github/workflows/build-linux-packages.yml \
   .github/workflows/build-macos-packages.yml \
   .github/workflows/build-windows-packages.yml \
-  .github/workflows/validate-lean-profile.yml \
-  .github/workflows/release-occt-sdk.yml
+  .github/workflows/build-latest-occt-sdk.yml \
+  .github/workflows/validate-lean-profile.yml
 ```
 
 Some platform baseline strings can legitimately remain unchanged. Every match
 should nevertheless be reviewed before release.
 
-## Validation before tagging
+## Validation before publication
 
-Do not create the combined release tag until the producer workflows pass for the
-new version and source pin.
+Do not create the combined release tag manually for a routine upstream release.
+The automatic workflow creates it only after all producer and combined candidate
+checks pass.
 
 At minimum:
 
 1. Run `git diff --check` and review the complete release-related diff.
-2. Push the release workflow/helpers to the intended release branch.
+2. Merge the reviewed workflow/helpers to the default branch so scheduled runs
+   use the intended automation revision.
 3. Confirm the Linux producer builds both shared and static packages and passes
    its compatibility matrix on Ubuntu 20.04, 22.04, and 24.04. OCCT 8.0.1
    headers do not compile with Ubuntu 20.04's default GCC 9, so the focal
@@ -469,12 +324,19 @@ At minimum:
 8. Confirm the Windows shared DLL dependency scan rejects every disabled optional
    runtime family.
 
-While the combined workflow is installed under `.github/workflows/`, it can
-also be started with `workflow_dispatch` as an end-to-end preflight. Its publish
-job is deliberately gated to a tag push, so a manual run builds/verifies the
-inputs without publishing a release.
+`workflow_dispatch` can be used as an end-to-end preflight. A run dispatched from
+a non-default branch can build and qualify but cannot publish. A default-branch
+run for a new stable upstream version is publication-capable; use
+`force_qualify` when the intent is to re-check an already-published version
+without creating another release.
 
-Ordinary pushes to the configured release branch start a producer only when that
+Pull requests that modify the orchestrator, any producer workflow or helper tree,
+or the combined release verifier also run the orchestrator as a forced
+qualification against the current stable upstream release. Pull-request refs can
+never enter the publish job, so this exercises the full reusable
+build/qualification path without creating a tag or GitHub Release.
+
+Ordinary pushes to the configured producer branches start a producer only when that
 producer's workflow or helper paths change. Documentation-only commits and
 unrelated branch changes therefore do not launch SDK builds. Never use a skip
 marker for changes that affect release workflows, helpers, source pins, or
@@ -484,54 +346,52 @@ package contents when a qualification run is required.
 
 The combined release tag must point to the exact commit containing the reviewed
 workflow and helper implementation. Use a **lightweight tag**. The release
-workflow verifies that the GitHub tag resolves directly to the workflow event
-commit; the known-good 7.9.3 release also used a lightweight tag.
+workflow creates `occt-sdk-X.Y.Z` at `${{ github.sha }}` after qualification and
+verifies through the GitHub API that the tag resolves directly to that commit.
+If an unpublished tag from an interrupted retry already exists, it may be reused
+only when it resolves to the same automation revision; any conflicting tag fails
+closed.
 
-For a future release, first switch to the intended release branch, install the
-reviewed template as the active release workflow, commit that exact state, and
-then create the lightweight release tag:
-
-```bash
-git switch OCCT-XYZ
-git pull --ff-only origin OCCT-XYZ
-
-cp .github/occt-sdk-release/release-template.yml \
-  .github/workflows/release-occt-sdk.yml
-# edit release-specific values, review, and commit the active workflow
-
-git rev-parse HEAD
-
-git tag occt-sdk-X.Y.Z HEAD
-git push origin refs/tags/occt-sdk-X.Y.Z
-```
-
-Pushing the exact configured tag starts
-`.github/workflows/release-occt-sdk.yml`. The workflow then:
+For a new stable upstream release, the workflow:
 
 1. builds and qualifies the Linux SDKs;
 2. builds and qualifies the four macOS SDKs;
 3. builds and qualifies the lean Windows shared and static SDKs;
 4. verifies the combined inventory;
-5. creates a draft GitHub Release;
-6. verifies all uploaded GitHub asset digests while still a draft;
-7. publishes the release;
-8. verifies that GitHub reports the published release as immutable.
+5. re-checks the upstream tag after qualification and re-verifies the same run
+   artifacts;
+6. archives the exact upstream source commit and writes its SHA-256 checksum;
+7. creates the lightweight SDK tag at the automation revision;
+8. creates a draft GitHub Release from the 16 qualified SDK files plus the two
+   preserved source files;
+9. verifies all uploaded GitHub asset digests while still a draft;
+10. publishes the release;
+11. verifies the tag again and requires GitHub to report the published release
+    as immutable.
 
-Do not move or recreate the release tag while an earlier run for that tag is
-still active. Tag-triggered runs intentionally do not cancel each other.
-After the published release is verified immutable, move the completed workflow
-back to `.github/occt-sdk-release/release-template.yml` (or otherwise remove
-the active one-shot workflow) and commit that cleanup.
+The workflow-level concurrency group serializes detection/build/publish runs, so
+two automatic release attempts cannot race each other.
 
 ## Expected release inventory
 
-The current r3 template expects exactly 16 files, the same count as immutable r2.
-The Windows shared pair changes identity from the upstream full package to the
-source-built lean package.
+The qualified SDK candidate remains exactly 16 files, the same count as immutable
+r2/r3. New automatic releases add an exact upstream source archive and its
+adjacent SHA-256 file, so the final published release contains exactly 18 assets.
+The r3-derived recovery example retains the historical 16-file release shape.
 
 - Windows: 1 lean shared ZIP + checksum and 1 lean static ZIP + checksum = 4 files.
 - Linux: shared and static `.tar.gz` archives + 2 `.sha256` files = 4 files.
 - macOS: arm64/x86_64 × shared/static archives + 4 `.sha256` files = 8 files.
+- Source preservation: exact upstream Git tree archive + checksum = 2 files.
+
+The preserved source archive follows:
+
+```text
+opencascade-X.Y.Z-source-<source-sha12>.tar.gz
+```
+
+The adjacent `.sha256` file is uploaded and both files are covered by GitHub's
+release-asset digest verification before publication.
 
 Linux package names follow:
 
@@ -792,24 +652,26 @@ asset count other than 16.
 
 ## Recovering from a failed release run
 
-If a tag-triggered run fails before publication:
+If an automatic run fails before publication, its publish step deletes only a
+draft that it can still prove belongs to that workflow attempt. If GitHub accepts
+publication but then reports that same workflow-owned release as mutable, the
+step deletes the mutable release and fails the run. The lightweight SDK tag is
+retained for safe retry. A cancellation or runner failure can still leave a draft
+or mutable release behind. Before retrying:
 
-1. Diagnose and fix the workflow on the release branch.
-2. Make sure every older run for the release tag is terminal; cancel obsolete
-   runs before retagging.
-3. Check that no stale draft release remains for the tag. The workflow normally
-   removes a draft that it created when publication fails.
-4. Delete the failed remote/local tag, recreate the lightweight tag at the fixed
-   workflow commit, and push it again.
+1. Diagnose and fix the workflow on the default branch.
+2. Make sure every older automatic run is terminal.
+3. Remove any stale draft release for the intended tag.
+4. If a stale tag exists and still points to the same automation revision, a
+   rerun can reuse it. If the fix requires a new automation commit, delete the
+   unpublished stale tag first; the next successful run will recreate it at the
+   new `${{ github.sha }}`.
 
 Example:
 
 ```bash
 release_tag=occt-sdk-X.Y.Z
 git push origin ":refs/tags/$release_tag"
-git tag -d "$release_tag"
-git tag "$release_tag" <fixed-workflow-commit>
-git push origin "refs/tags/$release_tag"
 ```
 
 Never reuse or move a tag after its release has been successfully published.
@@ -824,9 +686,13 @@ After the workflow succeeds, verify through the GitHub API/UI that:
 - the release is non-draft and non-prerelease unless intentionally configured
   otherwise;
 - the tag is the release tag configured for this release;
-- the release has exactly the configured asset inventory (16 assets for r3);
+- the release has exactly the configured asset inventory (18 assets for new
+  automatic releases: 16 SDK files plus the exact-source archive and checksum;
+  historical r3-shaped recovery releases remain 16 assets);
 - the published release is immutable;
 - Linux/macOS filenames contain the expected 12-character source SHA prefix;
+- the preserved source archive filename contains the expected source SHA prefix
+  and its adjacent `.sha256` file verifies;
 - release notes record the complete source SHA and workflow revision.
 
 The Actions artifacts are duplicates of the published release assets. After the
