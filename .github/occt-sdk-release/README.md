@@ -13,14 +13,17 @@ OCCT source commit and uses the same geometry/data-exchange toolkit closure.
 
 ## Release architecture
 
-The release workflow is retained as `.github/occt-sdk-release/release-template.yml`.
-It is intentionally outside `.github/workflows/` between releases so a
-version-specific workflow does not remain registered as an active workflow. The
-checked-in template is the last known-good workflow from the published 8.0.1 r3
-release and intentionally retains its r3-specific values. For a future release,
-copy the template to `.github/workflows/release-occt-sdk.yml`, update every
-release-specific value, validate it, and remove/archive it again after the
-release is immutable.
+The live release workflow is `.github/workflows/build-latest-occt-sdk.yml` on the
+default branch. It detects a new stable upstream GitHub Release, builds all three
+platform families from the exact upstream source commit, qualifies the complete
+16-file candidate, and publishes the combined SDK release only after every check
+passes. Routine releases do not require installing or editing a version-specific
+`.github/workflows/release-occt-sdk.yml`.
+
+`.github/occt-sdk-release/release-template.yml` is the retained last known-good
+workflow from immutable `occt-sdk-8.0.1-r3`. It intentionally remains
+version-specific and is kept only as a historical/manual recovery reference. The
+automatic release path does not execute or copy it.
 
 - Linux uses `.github/workflows/build-linux-packages.yml` and produces lean native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
@@ -74,8 +77,9 @@ The immutable `occt-sdk-8.0.1-r3` release was published on 2026-11-01 from
 workflow commit `39db8383d636fa90504dad663f51e9001508eeb9`. It keeps the
 16-file inventory while replacing the full Windows shared ZIP with the
 source-built lean shared SDK and narrowing all source-built platform SDKs to the
-same 28-toolkit profile. The retained release template is the r3 workflow kept
-as the starting point for the next release port.
+same 28-toolkit profile. The retained r3 release template is historical evidence
+and a manual recovery reference; future normal releases use the live automatic
+workflow instead.
 
 ## When upstream publishes the next OCCT release
 
@@ -90,22 +94,27 @@ this fork before it can be qualified.
 If every platform build and relocated consumer test passes, the workflow verifies
 the full 16-file release inventory, re-resolves the upstream tag to make sure it
 did not move during the build, and uploads candidate metadata alongside the
-platform workflow artifacts. It does **not** create an SDK tag or GitHub Release.
-The exact lean toolkit closure, system-library requirements, and producer
-baselines remain a release-specific compatibility contract that should be
-reviewed when upstream changes.
+platform workflow artifacts. For a genuinely new upstream version on the default
+branch, a final publish job then re-downloads those same run artifacts, repeats
+the inventory/source checks, creates lightweight `occt-sdk-X.Y.Z` at the exact
+automation revision, creates a draft GitHub Release, verifies every uploaded
+GitHub asset digest, publishes the release, and requires GitHub to report it as
+immutable. The exact lean toolkit closure, system-library requirements, and
+producer baselines remain a release-specific compatibility contract; incompatible
+upstream changes fail before publication.
 
-The workflow has a weekly schedule and can also be run manually for an exact
+The workflow polls daily at 06:17 UTC and can also be run manually for an exact
 stable upstream tag. GitHub requires both scheduled and manually dispatched
 workflows to exist on the repository's default branch. This fork's default branch
-is `master`, so candidate qualification becomes available only after the SDK
-automation layer (the reusable builders, helpers, and
-`build-latest-occt-sdk.yml`) is present on `master`.
+is `master`. Automatic publication is additionally gated to the default branch,
+so dispatching the workflow from another branch can qualify a candidate but
+cannot create a tag or release.
 
 Manual runs also expose `force_qualify`. This is intended for validating the
 automation against an already-published known-good release (for example 8.0.1)
 or deliberately re-running qualification after automation changes. It does not
-bypass the source-SHA provenance check.
+bypass the source-SHA provenance check, and it never republishes an existing SDK
+version.
 
 An existing SDK release with tag `occt-sdk-X.Y.Z` (or an immutable replacement
 such as `occt-sdk-X.Y.Z-r2`) suppresses another automatic build for that upstream
@@ -119,11 +128,11 @@ Do not create a new fork release branch from upstream `master` merely because
 the development version has advanced. The SDK branches and releases in this fork
 are intended to correspond to identifiable upstream release tags.
 
-As of 2026-10-09, the latest upstream stable GitHub Release is `V8.0.1`.
+As of 2026-11-02, the latest upstream stable GitHub Release is `V8.0.1`.
 Upstream `master` identifies itself as `8.1.0-dev1`, so 8.1 is the next
 development line but is not yet a stable release to package.
 
-For automatic candidate qualification, the normal policy is:
+For automatic qualification and publication, the normal policy is:
 
 1. Wait for a new upstream GitHub Release/tag.
 2. Prefer the final stable release for a durable SDK release.
@@ -414,15 +423,16 @@ manifest validation.
 
 ### Combined release workflow
 
-Copy `.github/occt-sdk-release/release-template.yml` to
-`.github/workflows/release-occt-sdk.yml` for the release being prepared, then
-update:
+The normal combined release path is `.github/workflows/build-latest-occt-sdk.yml`.
+It derives `OCCT_VERSION`, `OCCT_SOURCE_SHA`, the upstream tag, and the SDK
+release tag from the stable upstream GitHub Release at runtime. There is no
+per-release workflow file to install and no version/source pin to edit for a
+routine new upstream release.
 
-- the exact tag trigger. Use `occt-sdk-X.Y.Z` for a normal new release; use a
-  suffix such as `-r2` when replacing an already-published immutable release;
-- `OCCT_VERSION`;
-- `OCCT_SOURCE_SHA`;
-- the platform descriptions if the package/toolchain contract changed.
+The retained `.github/occt-sdk-release/release-template.yml` is intentionally
+bound to the immutable 8.0.1 r3 release. Use it only when deliberately preparing
+a manual replacement/recovery workflow; in that exceptional case every tag,
+version, source SHA, and package expectation must be reviewed before use.
 
 In `.github/occt-sdk-release/verify-release-assets.sh`, update the exact Windows
 lean-shared and static asset names, manifest expectations, and total inventory
@@ -431,29 +441,32 @@ when the package shape changes.
 After editing, search for stale release-specific values. For example:
 
 ```bash
-rg -n '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
+rg -n --glob '!release-template.yml' \
+  '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
   .github/linux-occt-sdk \
   .github/macos-occt-sdk \
   .github/occt-sdk-release \
   .github/workflows/build-linux-packages.yml \
   .github/workflows/build-macos-packages.yml \
   .github/workflows/build-windows-packages.yml \
-  .github/workflows/validate-lean-profile.yml \
-  .github/workflows/release-occt-sdk.yml
+  .github/workflows/build-latest-occt-sdk.yml \
+  .github/workflows/validate-lean-profile.yml
 ```
 
 Some platform baseline strings can legitimately remain unchanged. Every match
 should nevertheless be reviewed before release.
 
-## Validation before tagging
+## Validation before publication
 
-Do not create the combined release tag until the producer workflows pass for the
-new version and source pin.
+Do not create the combined release tag manually for a routine upstream release.
+The automatic workflow creates it only after all producer and combined candidate
+checks pass.
 
 At minimum:
 
 1. Run `git diff --check` and review the complete release-related diff.
-2. Push the release workflow/helpers to the intended release branch.
+2. Merge the reviewed workflow/helpers to the default branch so scheduled runs
+   use the intended automation revision.
 3. Confirm the Linux producer builds both shared and static packages and passes
    its compatibility matrix on Ubuntu 20.04, 22.04, and 24.04. OCCT 8.0.1
    headers do not compile with Ubuntu 20.04's default GCC 9, so the focal
@@ -469,12 +482,13 @@ At minimum:
 8. Confirm the Windows shared DLL dependency scan rejects every disabled optional
    runtime family.
 
-While the combined workflow is installed under `.github/workflows/`, it can
-also be started with `workflow_dispatch` as an end-to-end preflight. Its publish
-job is deliberately gated to a tag push, so a manual run builds/verifies the
-inputs without publishing a release.
+`workflow_dispatch` can be used as an end-to-end preflight. A run dispatched from
+a non-default branch can build and qualify but cannot publish. A default-branch
+run for a new stable upstream version is publication-capable; use
+`force_qualify` when the intent is to re-check an already-published version
+without creating another release.
 
-Ordinary pushes to the configured release branch start a producer only when that
+Ordinary pushes to the configured producer branches start a producer only when that
 producer's workflow or helper paths change. Documentation-only commits and
 unrelated branch changes therefore do not launch SDK builds. Never use a skip
 marker for changes that affect release workflows, helpers, source pins, or
@@ -484,50 +498,35 @@ package contents when a qualification run is required.
 
 The combined release tag must point to the exact commit containing the reviewed
 workflow and helper implementation. Use a **lightweight tag**. The release
-workflow verifies that the GitHub tag resolves directly to the workflow event
-commit; the known-good 7.9.3 release also used a lightweight tag.
+workflow creates `occt-sdk-X.Y.Z` at `${{ github.sha }}` after qualification and
+verifies through the GitHub API that the tag resolves directly to that commit.
+If an unpublished tag from an interrupted retry already exists, it may be reused
+only when it resolves to the same automation revision; any conflicting tag fails
+closed.
 
-For a future release, first switch to the intended release branch, install the
-reviewed template as the active release workflow, commit that exact state, and
-then create the lightweight release tag:
-
-```bash
-git switch OCCT-XYZ
-git pull --ff-only origin OCCT-XYZ
-
-cp .github/occt-sdk-release/release-template.yml \
-  .github/workflows/release-occt-sdk.yml
-# edit release-specific values, review, and commit the active workflow
-
-git rev-parse HEAD
-
-git tag occt-sdk-X.Y.Z HEAD
-git push origin refs/tags/occt-sdk-X.Y.Z
-```
-
-Pushing the exact configured tag starts
-`.github/workflows/release-occt-sdk.yml`. The workflow then:
+For a new stable upstream release, the workflow:
 
 1. builds and qualifies the Linux SDKs;
 2. builds and qualifies the four macOS SDKs;
 3. builds and qualifies the lean Windows shared and static SDKs;
 4. verifies the combined inventory;
-5. creates a draft GitHub Release;
-6. verifies all uploaded GitHub asset digests while still a draft;
-7. publishes the release;
-8. verifies that GitHub reports the published release as immutable.
+5. re-checks the upstream tag after qualification and re-verifies the same run
+   artifacts;
+6. creates the lightweight SDK tag at the automation revision;
+7. creates a draft GitHub Release from the qualified artifacts;
+8. verifies all uploaded GitHub asset digests while still a draft;
+9. publishes the release;
+10. verifies the tag again and requires GitHub to report the published release
+    as immutable.
 
-Do not move or recreate the release tag while an earlier run for that tag is
-still active. Tag-triggered runs intentionally do not cancel each other.
-After the published release is verified immutable, move the completed workflow
-back to `.github/occt-sdk-release/release-template.yml` (or otherwise remove
-the active one-shot workflow) and commit that cleanup.
+The workflow-level concurrency group serializes detection/build/publish runs, so
+two automatic release attempts cannot race each other.
 
 ## Expected release inventory
 
-The current r3 template expects exactly 16 files, the same count as immutable r2.
-The Windows shared pair changes identity from the upstream full package to the
-source-built lean package.
+The current automatic verifier and retained r3 template expect exactly 16 files,
+the same count as immutable r2. The Windows shared pair changes identity from the
+upstream full package to the source-built lean package.
 
 - Windows: 1 lean shared ZIP + checksum and 1 lean static ZIP + checksum = 4 files.
 - Linux: shared and static `.tar.gz` archives + 2 `.sha256` files = 4 files.
@@ -792,24 +791,24 @@ asset count other than 16.
 
 ## Recovering from a failed release run
 
-If a tag-triggered run fails before publication:
+If an automatic run fails before publication, its publish step deletes only a
+draft that it can still prove belongs to that workflow attempt. The lightweight
+SDK tag is retained for safe retry; a cancellation or runner failure can also
+leave a draft behind. Before retrying:
 
-1. Diagnose and fix the workflow on the release branch.
-2. Make sure every older run for the release tag is terminal; cancel obsolete
-   runs before retagging.
-3. Check that no stale draft release remains for the tag. The workflow normally
-   removes a draft that it created when publication fails.
-4. Delete the failed remote/local tag, recreate the lightweight tag at the fixed
-   workflow commit, and push it again.
+1. Diagnose and fix the workflow on the default branch.
+2. Make sure every older automatic run is terminal.
+3. Remove any stale draft release for the intended tag.
+4. If a stale tag exists and still points to the same automation revision, a
+   rerun can reuse it. If the fix requires a new automation commit, delete the
+   unpublished stale tag first; the next successful run will recreate it at the
+   new `${{ github.sha }}`.
 
 Example:
 
 ```bash
 release_tag=occt-sdk-X.Y.Z
 git push origin ":refs/tags/$release_tag"
-git tag -d "$release_tag"
-git tag "$release_tag" <fixed-workflow-commit>
-git push origin "refs/tags/$release_tag"
 ```
 
 Never reuse or move a tag after its release has been successfully published.
@@ -824,7 +823,8 @@ After the workflow succeeds, verify through the GitHub API/UI that:
 - the release is non-draft and non-prerelease unless intentionally configured
   otherwise;
 - the tag is the release tag configured for this release;
-- the release has exactly the configured asset inventory (16 assets for r3);
+- the release has exactly the configured asset inventory (16 assets for the
+  current lean profile);
 - the published release is immutable;
 - Linux/macOS filenames contain the expected 12-character source SHA prefix;
 - release notes record the complete source SHA and workflow revision.

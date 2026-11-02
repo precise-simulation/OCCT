@@ -1,8 +1,8 @@
-name: Build latest upstream OCCT SDK candidate
+name: Build and publish latest upstream OCCT SDK
 
 on:
   schedule:
-    - cron: '17 6 * * 1'
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       should_build: ${{ steps.release.outputs.should_build }}
+      should_publish: ${{ steps.release.outputs.should_publish }}
       upstream_tag: ${{ steps.release.outputs.upstream_tag }}
       occt_version: ${{ steps.release.outputs.occt_version }}
       source_sha: ${{ steps.release.outputs.source_sha }}
@@ -91,9 +92,14 @@ jobs:
           release_pattern="^occt-sdk-${occt_version//./\\.}-r[0-9]+$"
           matching_release_count=0
           matching_source_count=0
+          matching_draft_count=0
           existing_tag=""
-          while IFS=$'\t' read -r candidate_tag records_source; do
+          while IFS=$'\t' read -r candidate_tag records_source is_draft; do
             if [[ "$candidate_tag" == "$release_tag" || "$candidate_tag" =~ $release_pattern ]]; then
+              if [[ "$is_draft" == "true" ]]; then
+                ((matching_draft_count += 1))
+                continue
+              fi
               ((matching_release_count += 1))
               if [[ -z "$existing_tag" ]]; then
                 existing_tag="$candidate_tag"
@@ -105,13 +111,20 @@ jobs:
           done < <(
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
               jq -rs -r --arg source "$source_sha" '
-                .[][] | [.tag_name, ((.body // "") | contains($source))] | @tsv
+                .[][] | [.tag_name, ((.body // "") | contains($source)), .draft] | @tsv
               '
           )
 
+          if (( matching_draft_count > 0 )); then
+            echo "stale draft SDK release exists for OCCT $occt_version; remove it before retrying automatic publication" >&2
+            exit 1
+          fi
+
           should_build=true
+          should_publish=true
           if (( matching_release_count > 0 )); then
-            if (( matching_source_count == 0 )); then
+            should_publish=false
+            if (( matching_source_count != matching_release_count )); then
               echo "existing SDK release(s) for OCCT $occt_version do not record current upstream source $source_sha" >&2
               echo "refusing to ignore a possible upstream retag or provenance mismatch" >&2
               exit 1
@@ -127,6 +140,7 @@ jobs:
           fi
 
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
           echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
           echo "occt_version=$occt_version" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
@@ -176,6 +190,7 @@ jobs:
       SOURCE_SHA: ${{ needs.detect.outputs.source_sha }}
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
       INTENDED_RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+      PUBLISH_REQUESTED: ${{ needs.detect.outputs.should_publish }}
       WORKFLOW_SHA: ${{ github.sha }}
     steps:
       - name: Checkout exact automation revision
@@ -260,7 +275,11 @@ jobs:
             echo "- Intended release tag: \`$INTENDED_RELEASE_TAG\`"
             echo "- Verified release files: 16"
             echo
-            echo "No tag or GitHub Release was created. Review the release-specific toolkit/toolchain contract before running the release workflow for this exact source SHA."
+            if [[ "$PUBLISH_REQUESTED" == "true" ]]; then
+              echo "This is a new upstream release. The publish job will re-verify these run artifacts before creating the tag and GitHub Release."
+            else
+              echo "Qualification-only run: a matching SDK release already exists, so no new tag or GitHub Release will be created."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload candidate metadata
@@ -270,3 +289,263 @@ jobs:
           path: ${{ runner.temp }}/occt-sdk-candidate.json
           if-no-files-found: error
           retention-days: 3
+
+  publish:
+    name: Publish qualified OCCT SDK release
+    if: needs.detect.outputs.should_publish == 'true' && github.ref == 'refs/heads/master'
+    needs:
+      - detect
+      - qualify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OCCT_VERSION: ${{ needs.detect.outputs.occt_version }}
+      SOURCE_SHA: ${{ needs.detect.outputs.source_sha }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+      INTENDED_RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+      WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact automation revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Download qualified Linux SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-linux-sdk-*
+          path: ${{ runner.temp }}/release-assets/linux
+          merge-multiple: true
+
+      - name: Download qualified macOS SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-macos-sdk-*
+          path: ${{ runner.temp }}/release-assets/macos
+          merge-multiple: true
+
+      - name: Download qualified Windows SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-windows-sdk-*
+          path: ${{ runner.temp }}/release-assets/windows
+          merge-multiple: true
+
+      - name: Re-verify qualified assets and upstream source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
+          mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
+          test "${#assets[@]}" -eq 16
+
+          object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/ref/tags/$UPSTREAM_TAG")"
+          object_type="$(jq -r '.object.type' <<<"$object_json")"
+          current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          for _ in 1 2 3 4 5; do
+            if [[ "$object_type" == "commit" ]]; then
+              break
+            fi
+            if [[ "$object_type" != "tag" ]]; then
+              echo "upstream tag now resolves to unsupported object type: $object_type" >&2
+              exit 1
+            fi
+            object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/tags/$current_source_sha")"
+            object_type="$(jq -r '.object.type' <<<"$object_json")"
+            current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          done
+          test "$object_type" = "commit"
+          if [[ "$current_source_sha" != "$SOURCE_SHA" ]]; then
+            echo "upstream tag moved after qualification: expected $SOURCE_SHA, now $current_source_sha" >&2
+            exit 1
+          fi
+
+      - name: Create tag, verify draft assets, and publish immutable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_version="2026-03-10"
+          published=0
+          draft_id=""
+          create_attempted=0
+          run_marker="occt-sdk-auto-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+
+          resolve_upstream_source_sha() {
+            local object_json object_type current_source_sha
+            object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/ref/tags/$UPSTREAM_TAG")"
+            object_type="$(jq -r '.object.type' <<<"$object_json")"
+            current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+            for _ in 1 2 3 4 5; do
+              if [[ "$object_type" == "commit" ]]; then
+                break
+              fi
+              if [[ "$object_type" != "tag" ]]; then
+                echo "upstream tag now resolves to unsupported object type: $object_type" >&2
+                return 1
+              fi
+              object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/tags/$current_source_sha")"
+              object_type="$(jq -r '.object.type' <<<"$object_json")"
+              current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+            done
+            if [[ "$object_type" != "commit" ]]; then
+              echo "could not peel upstream tag $UPSTREAM_TAG to a commit" >&2
+              return 1
+            fi
+            printf '%s\n' "$current_source_sha"
+          }
+
+          find_draft_id() {
+            gh api --paginate \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs --arg tag "$INTENDED_RELEASE_TAG" '
+                [ .[][] | select(.tag_name == $tag and .draft == true) ] |
+                if length == 1 then .[0].id
+                elif length == 0 then empty
+                else error("multiple draft releases found for tag")
+                end
+              '
+          }
+
+          find_our_draft_id() {
+            gh api --paginate \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs --arg tag "$INTENDED_RELEASE_TAG" --arg marker "$run_marker" '
+                [ .[][] |
+                  select(.tag_name == $tag and .draft == true) |
+                  select((.body // "") | contains($marker))
+                ] |
+                if length == 1 then .[0].id
+                elif length == 0 then empty
+                else error("multiple workflow-owned draft releases found for tag")
+                end
+              '
+          }
+
+          cleanup_unpublished() {
+            status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 && "$published" -eq 0 ]]; then
+              if [[ "$create_attempted" -eq 1 && -z "$draft_id" ]]; then
+                draft_id="$(find_our_draft_id 2>/dev/null || true)"
+              fi
+              if [[ -n "$draft_id" ]]; then
+                release_json="$(gh api \
+                  -H "X-GitHub-Api-Version: $api_version" \
+                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" 2>/dev/null || true)"
+                if [[ -n "$release_json" ]] && jq -e \
+                  --arg tag "$INTENDED_RELEASE_TAG" \
+                  --arg marker "$run_marker" \
+                  '.draft == true and .tag_name == $tag and ((.body // "") | contains($marker))' \
+                  <<<"$release_json" >/dev/null; then
+                  gh api -X DELETE \
+                    -H "X-GitHub-Api-Version: $api_version" \
+                    "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
+                else
+                  echo "release $draft_id is no longer a verified workflow-owned draft; preserving it and the tag" >&2
+                fi
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup_unpublished EXIT
+
+          existing_draft_id="$(find_draft_id)"
+          if [[ -n "$existing_draft_id" ]] || gh api \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$INTENDED_RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release already exists for $INTENDED_RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          if gh api \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$INTENDED_RELEASE_TAG" >/dev/null 2>&1; then
+            bash .github/linux-occt-sdk/verify-tag.sh "$INTENDED_RELEASE_TAG" "$WORKFLOW_SHA" >/dev/null
+          else
+            gh api -X POST \
+              -H "X-GitHub-Api-Version: $api_version" \
+              "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$INTENDED_RELEASE_TAG" \
+              -f sha="$WORKFLOW_SHA" >/dev/null
+          fi
+          bash .github/linux-occt-sdk/verify-tag.sh "$INTENDED_RELEASE_TAG" "$WORKFLOW_SHA" >/dev/null
+          bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
+
+          mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
+          test "${#assets[@]}" -eq 16
+
+          notes="OCCT $OCCT_VERSION SDK bundle built from official upstream release $UPSTREAM_TAG at source commit $SOURCE_SHA."
+          notes="$notes"$'\n\n'"Windows shared: qualified lean x64 VC143 source-built SDK restricted to the geometry/data-exchange toolkit closure with optional third-party dependencies disabled."
+          notes="$notes"$'\n'"Windows static: qualified lean x64 VC143 static SDK from the same official OCCT source commit, with optional third-party dependencies disabled."
+          notes="$notes"$'\n'"Linux: qualified lean x86_64 shared/static SDKs with glibc 2.17 baseline."
+          notes="$notes"$'\n'"macOS: qualified lean x86_64 and arm64 shared/static SDKs targeting macOS 13.0."
+          notes="$notes"$'\n\n'"Automation revision: $WORKFLOW_SHA"
+          notes="$notes"$'\n\n'"<!-- $run_marker -->"
+
+          create_attempted=1
+          gh release create "$INTENDED_RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "OCCT $OCCT_VERSION SDKs - Windows, Linux, macOS" \
+            --notes "$notes"
+
+          draft_id="$(find_our_draft_id)"
+          test -n "$draft_id"
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          test "$(jq -r '.draft' <<<"$release_json")" = "true"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$INTENDED_RELEASE_TAG"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
+
+          current_source_sha="$(resolve_upstream_source_sha)"
+          if [[ "$current_source_sha" != "$SOURCE_SHA" ]]; then
+            echo "upstream tag moved while the draft was being uploaded: expected $SOURCE_SHA, now $current_source_sha" >&2
+            exit 1
+          fi
+          bash .github/linux-occt-sdk/verify-tag.sh "$INTENDED_RELEASE_TAG" "$WORKFLOW_SHA" >/dev/null
+          gh api -X PATCH \
+            -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
+            -F draft=false >/dev/null
+          published=1
+
+          release_json="$(gh api -H "X-GitHub-Api-Version: $api_version" \
+            "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
+          test "$(jq -r '.draft' <<<"$release_json")" = "false"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          test "$(jq -r '.immutable' <<<"$release_json")" = "true"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$INTENDED_RELEASE_TAG"
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
+          for file in "${assets[@]}"; do
+            name="$(basename "$file")"
+            expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            actual="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            test "$actual" = "$expected"
+          done
+          bash .github/linux-occt-sdk/verify-tag.sh "$INTENDED_RELEASE_TAG" "$WORKFLOW_SHA" >/dev/null
+          trap - EXIT
+
+          {
+            echo "### Published OCCT $OCCT_VERSION SDK release"
+            echo
+            echo "- Upstream tag: \`$UPSTREAM_TAG\`"
+            echo "- Source commit: \`$SOURCE_SHA\`"
+            echo "- Release tag: \`$INTENDED_RELEASE_TAG\`"
+            echo "- Automation revision: \`$WORKFLOW_SHA\`"
+            echo "- Verified release files: 16"
+            echo "- GitHub release immutable: true"
+          } >> "$GITHUB_STEP_SUMMARY"
