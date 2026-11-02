@@ -8,6 +8,12 @@ on:
       - master
     paths:
       - .github/occt-sdk-release/**
+      - .github/linux-occt-sdk/**
+      - .github/macos-occt-sdk/**
+      - .github/windows-occt-sdk/**
+      - .github/workflows/build-linux-packages.yml
+      - .github/workflows/build-macos-packages.yml
+      - .github/workflows/build-windows-packages.yml
       - .github/workflows/build-latest-occt-sdk.yml
   workflow_dispatch:
     inputs:
