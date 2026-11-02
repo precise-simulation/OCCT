@@ -3,9 +3,9 @@
 This directory documents the combined OCCT SDK release process used for
 `occt-sdk-8.0.1` and its Windows SDK replacements, adapted from the validated
 7.9.3 workflow. The published `occt-sdk-8.0.1-r2` added a lean Windows static
-SDK. The current template prepares `occt-sdk-8.0.1-r3`, which replaces the full
-upstream Windows shared package with a source-built lean shared SDK and narrows
-the Linux and macOS packages to the same 28-toolkit profile.
+SDK. The published `occt-sdk-8.0.1-r3` replaced the full upstream Windows shared
+package with a source-built lean shared SDK and narrowed the Linux and macOS
+packages to the same 28-toolkit profile.
 
 The combined release publishes one GitHub release containing qualified lean SDKs
 for Windows, Linux, and macOS. Every package is built from the exact upstream
@@ -16,10 +16,11 @@ OCCT source commit and uses the same geometry/data-exchange toolkit closure.
 The release workflow is retained as `.github/occt-sdk-release/release-template.yml`.
 It is intentionally outside `.github/workflows/` between releases so a
 version-specific workflow does not remain registered as an active workflow. The
-checked-in template currently targets the planned 8.0.1 r3 asset shape. For a
-future release, copy the template to `.github/workflows/release-occt-sdk.yml`,
-update the release-specific values, validate it, and remove/archive it again
-after the release is immutable.
+checked-in template is the last known-good workflow from the published 8.0.1 r3
+release and intentionally retains its r3-specific values. For a future release,
+copy the template to `.github/workflows/release-occt-sdk.yml`, update every
+release-specific value, validate it, and remove/archive it again after the
+release is immutable.
 
 - Linux uses `.github/workflows/build-linux-packages.yml` and produces lean native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
@@ -67,10 +68,14 @@ and the release tag resolves directly to the workflow commit above.
 
 The immutable `occt-sdk-8.0.1-r2` release keeps the same Linux, macOS, and
 official Windows shared inputs and adds the qualified lean Windows static SDK.
-It contains 16 files. The current release template targets
-`occt-sdk-8.0.1-r3`; it keeps the 16-file inventory while replacing the full
-Windows shared ZIP and narrowing all source-built platform SDKs to the lean
-28-toolkit profile.
+It contains 16 files.
+
+The immutable `occt-sdk-8.0.1-r3` release was published on 2026-11-01 from
+workflow commit `39db8383d636fa90504dad663f51e9001508eeb9`. It keeps the
+16-file inventory while replacing the full Windows shared ZIP with the
+source-built lean shared SDK and narrowing all source-built platform SDKs to the
+same 28-toolkit profile. The retained release template is the r3 workflow kept
+as the starting point for the next release port.
 
 ## When upstream publishes the next OCCT release
 
@@ -497,7 +502,7 @@ SDK before and after packaging.
 
 ## Windows lean shared SDK implementation
 
-The r3 producer replaces the upstream full shared ZIP with a source-built shared
+The r3 producer replaced the upstream full shared ZIP with a source-built shared
 SDK for consumers that want the same small geometry/data-exchange surface as the
 lean static SDK without static OCCT linkage.
 
@@ -533,7 +538,7 @@ every imported `TK*.dll` must exist in the extracted package.
 Linux and macOS already publish both shared and static SDK variants. The specific
 addition made for `occt-sdk-8.0.1-r2` was the Windows static SDK described in
 this section; r2 still uses the official upstream Windows ZIP for shared linkage.
-The planned r3 release replaces that shared package with the lean source-built
+The published r3 release replaced that shared package with the lean source-built
 variant described above while retaining the lean static contract here.
 
 The Windows static package in `occt-sdk-8.0.1-r2` is intentionally not a
@@ -719,10 +724,10 @@ The Windows static artifact is accepted only after all of the following pass:
 
 The r2 static qualification was GitHub Actions run `37910758624`; its final
 executable demonstrated real static OCCT linkage rather than merely producing
-`.lib` files. The expanded r3 root-family consumer and the new lean shared build
-must be qualified again on GitHub Actions before the r3 tag is created.
+`.lib` files. For r3, the expanded root-family consumer and the new lean shared
+build were qualified on GitHub Actions before release publication.
 
-Every archive has an adjacent `.sha256` file. The r3 release workflow rejects
+Every archive has an adjacent `.sha256` file. The r3 release workflow rejected
 missing files, extra files, checksum failures, source/version mismatches, and an
 asset count other than 16.
 
@@ -741,10 +746,11 @@ If a tag-triggered run fails before publication:
 Example:
 
 ```bash
-git push origin :refs/tags/occt-sdk-8.0.1-r3
-git tag -d occt-sdk-8.0.1-r3
-git tag occt-sdk-8.0.1-r3 <fixed-workflow-commit>
-git push origin refs/tags/occt-sdk-8.0.1-r3
+release_tag=occt-sdk-X.Y.Z
+git push origin ":refs/tags/$release_tag"
+git tag -d "$release_tag"
+git tag "$release_tag" <fixed-workflow-commit>
+git push origin "refs/tags/$release_tag"
 ```
 
 Never reuse or move a tag after its release has been successfully published.
@@ -758,8 +764,8 @@ After the workflow succeeds, verify through the GitHub API/UI that:
 
 - the release is non-draft and non-prerelease unless intentionally configured
   otherwise;
-- the tag is the expected release tag (currently `occt-sdk-8.0.1-r3`);
-- there are exactly 16 release assets;
+- the tag is the release tag configured for this release;
+- the release has exactly the configured asset inventory (16 assets for r3);
 - the published release is immutable;
 - Linux/macOS filenames contain the expected 12-character source SHA prefix;
 - release notes record the complete source SHA and workflow revision.
