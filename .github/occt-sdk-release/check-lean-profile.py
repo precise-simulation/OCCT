@@ -39,24 +39,15 @@ def shell_build_profile(path: str):
     return roots, disabled
 
 
-def powershell_array(section: str, variable: str):
+def powershell_array(text: str, variable: str):
     match = re.search(
         rf"[\$]{re.escape(variable)}\s*=\s*@\((.*?)\n\s*\)",
-        section,
+        text,
         re.DOTALL,
     )
     if match is None:
-        raise RuntimeError(f"Windows workflow: ${variable} array was not found")
+        raise RuntimeError(f"PowerShell profile: ${variable} array was not found")
     return re.findall(r"'([^']+)'", match.group(1))
-
-
-def windows_profile_sections():
-    text = read(".github/workflows/build-windows-packages.yml")
-    marker = "\n  static:\n"
-    if marker not in text:
-        raise RuntimeError("Windows workflow: static job boundary was not found")
-    shared, static = text.split(marker, 1)
-    return {"shared": shared, "static": static}
 
 
 def release_expected_toolkits():
@@ -169,47 +160,32 @@ def main() -> int:
         expected,
     )
 
-    root_string = ";".join(roots)
-    cache_literal = f"BUILD_ADDITIONAL_TOOLKITS:[^=]*={root_string}$"
-    for linkage, section in windows_profile_sections().items():
-        root_assignments = re.findall(r"\$toolkits\s*=\s*'([^']+)'", section)
-        report_equal(
-            errors,
-            f"Windows {linkage} $toolkits occurrence count",
-            len(root_assignments),
-            1,
-        )
-        if root_assignments:
-            report_equal(
-                errors,
-                f"Windows {linkage} $toolkits",
-                root_assignments[0].split(";"),
-                roots,
-            )
+    windows_profile = read(".github/windows-occt-sdk/lean-profile.ps1")
+    report_equal(
+        errors,
+        "Windows LeanRootToolkits",
+        powershell_array(windows_profile, "LeanRootToolkits"),
+        roots,
+    )
+    report_equal(
+        errors,
+        "Windows LeanExpectedToolkits",
+        powershell_array(windows_profile, "LeanExpectedToolkits"),
+        expected,
+    )
+    report_equal(
+        errors,
+        "Windows LeanDisabledCMakeOptions",
+        powershell_array(windows_profile, "LeanDisabledCMakeOptions"),
+        disabled,
+    )
 
-        configure_disabled = re.findall(r"""['"]-D([A-Za-z0-9_]+)=OFF['"]""", section)
-        report_contains_all(
-            errors,
-            f"Windows {linkage} configure common disabled CMake options",
-            configure_disabled,
-            disabled,
-        )
-        report_equal(
-            errors,
-            f"Windows {linkage} $mustBeOff",
-            powershell_array(section, "mustBeOff"),
-            disabled,
-        )
-        report_equal(
-            errors,
-            f"Windows {linkage} $expected",
-            powershell_array(section, "expected"),
-            expected,
-        )
-        if cache_literal not in section:
-            errors.append(
-                f"Windows {linkage} cache validation does not require canonical roots: {root_string}"
-            )
+    for helper in (
+        ".github/windows-occt-sdk/configure-lean.ps1",
+        ".github/windows-occt-sdk/verify-lean-install.ps1",
+    ):
+        if "lean-profile.ps1" not in read(helper):
+            errors.append(f"{helper}: does not import lean-profile.ps1")
 
     if errors:
         print("Lean profile consistency check failed:", file=sys.stderr)

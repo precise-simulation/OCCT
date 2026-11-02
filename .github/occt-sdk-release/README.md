@@ -182,6 +182,7 @@ The SDK layer currently lives only in these fork-owned paths:
 ```text
 .github/linux-occt-sdk/
 .github/macos-occt-sdk/
+.github/windows-occt-sdk/
 .github/occt-sdk-release/
 .github/workflows/build-linux-packages.yml
 .github/workflows/build-macos-packages.yml
@@ -196,6 +197,7 @@ file at those paths:
 sdk_paths=(
   .github/linux-occt-sdk
   .github/macos-occt-sdk
+  .github/windows-occt-sdk
   .github/occt-sdk-release
   .github/workflows/build-linux-packages.yml
   .github/workflows/build-macos-packages.yml
@@ -337,6 +339,8 @@ In `.github/workflows/build-windows-packages.yml`:
 - change the push branch to the new release branch;
 - change `OCCT_VERSION` and `OCCT_SOURCE_SHA`;
 - review the Windows runner/toolchain and the lean shared/static toolkit closure;
+- review `.github/windows-occt-sdk/` alongside the workflow; the configure and
+  installed-SDK validation logic is shared by both Windows linkage jobs there;
 - keep the lean shared dependency exclusion list, relocation checks, and manifest
   expectations in sync with the release verifier;
 - keep the static external-consumer definitions
