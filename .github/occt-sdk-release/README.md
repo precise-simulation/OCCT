@@ -683,10 +683,13 @@ After the workflow succeeds, verify through the GitHub API/UI that:
 - the release is non-draft and non-prerelease unless intentionally configured
   otherwise;
 - the tag is the release tag configured for this release;
-- the release has exactly the configured asset inventory (16 assets for the
-  current lean profile);
+- the release has exactly the configured asset inventory (18 assets for new
+  automatic releases: 16 SDK files plus the exact-source archive and checksum;
+  historical r3-shaped recovery releases remain 16 assets);
 - the published release is immutable;
 - Linux/macOS filenames contain the expected 12-character source SHA prefix;
+- the preserved source archive filename contains the expected source SHA prefix
+  and its adjacent `.sha256` file verifies;
 - release notes record the complete source SHA and workflow revision.
 
 The Actions artifacts are duplicates of the published release assets. After the
