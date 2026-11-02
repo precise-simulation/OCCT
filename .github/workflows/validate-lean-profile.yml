@@ -18,22 +18,6 @@ on:
       - .github/windows-occt-sdk/**
       - .github/workflows/build-windows-packages.yml
       - .github/workflows/validate-lean-profile.yml
-  push:
-    branches:
-      - master
-    paths:
-      - .github/occt-sdk-release/lean-profile.json
-      - .github/occt-sdk-release/check-lean-profile.py
-      - .github/occt-sdk-release/verify-release-assets.sh
-      - .github/linux-occt-sdk/build-sdk.sh
-      - .github/linux-occt-sdk/sdk_tools.py
-      - .github/linux-occt-sdk/verify-release-assets.sh
-      - .github/macos-occt-sdk/build-sdk.sh
-      - .github/macos-occt-sdk/sdk_tools.py
-      - .github/macos-occt-sdk/verify-release-assets.sh
-      - .github/windows-occt-sdk/**
-      - .github/workflows/build-windows-packages.yml
-      - .github/workflows/validate-lean-profile.yml
 
 permissions:
   contents: read

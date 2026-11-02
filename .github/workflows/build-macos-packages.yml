@@ -23,18 +23,6 @@ on:
         required: false
         type: string
         default: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
-  pull_request:
-    branches:
-      - master
-    paths:
-      - .github/macos-occt-sdk/**
-      - .github/workflows/build-macos-packages.yml
-  push:
-    branches:
-      - master
-    paths:
-      - .github/macos-occt-sdk/**
-      - .github/workflows/build-macos-packages.yml
 
 permissions:
   contents: read
