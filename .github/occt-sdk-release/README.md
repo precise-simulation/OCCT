@@ -116,13 +116,14 @@ or deliberately re-running qualification after automation changes. It does not
 bypass the source-SHA provenance check, and it never republishes an existing SDK
 version.
 
-An existing SDK release with tag `occt-sdk-X.Y.Z` (or an immutable replacement
-such as `occt-sdk-X.Y.Z-r2`) suppresses another automatic build for that upstream
-version, but only when its release notes record the same exact upstream source
-SHA. A source mismatch is treated as a possible upstream retag/provenance problem
-and fails closed. Suffixes such as `-rc1` are not treated as immutable replacement
-releases. If a new release fails qualification, fix the automation/profile and
-rerun it.
+An existing published, non-prerelease, immutable SDK release with tag
+`occt-sdk-X.Y.Z` (or an immutable replacement such as `occt-sdk-X.Y.Z-r2`)
+suppresses another automatic build for that upstream version, but only when every
+matching release records the same exact upstream source SHA. A stale draft,
+mutable/prerelease state, or source mismatch is treated as an incomplete or
+provenance-sensitive release state and fails closed. Suffixes such as `-rc1` are
+not treated as immutable replacement releases. If a new release fails
+qualification, fix the automation/profile and rerun it.
 
 Do not create a new fork release branch from upstream `master` merely because
 the development version has advanced. The SDK branches and releases in this fork

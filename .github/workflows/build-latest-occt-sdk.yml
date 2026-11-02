@@ -93,14 +93,18 @@ jobs:
           matching_release_count=0
           matching_source_count=0
           matching_draft_count=0
+          matching_invalid_state_count=0
           existing_tag=""
-          while IFS=$'\t' read -r candidate_tag records_source is_draft; do
+          while IFS=$'\t' read -r candidate_tag records_source is_draft is_prerelease is_immutable; do
             if [[ "$candidate_tag" == "$release_tag" || "$candidate_tag" =~ $release_pattern ]]; then
               if [[ "$is_draft" == "true" ]]; then
                 ((matching_draft_count += 1))
                 continue
               fi
               ((matching_release_count += 1))
+              if [[ "$is_prerelease" != "false" || "$is_immutable" != "true" ]]; then
+                ((matching_invalid_state_count += 1))
+              fi
               if [[ -z "$existing_tag" ]]; then
                 existing_tag="$candidate_tag"
               fi
@@ -111,12 +115,22 @@ jobs:
           done < <(
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
               jq -rs -r --arg source "$source_sha" '
-                .[][] | [.tag_name, ((.body // "") | contains($source)), .draft] | @tsv
+                .[][] | [
+                  .tag_name,
+                  ((.body // "") | contains($source)),
+                  .draft,
+                  .prerelease,
+                  .immutable
+                ] | @tsv
               '
           )
 
           if (( matching_draft_count > 0 )); then
             echo "stale draft SDK release exists for OCCT $occt_version; remove it before retrying automatic publication" >&2
+            exit 1
+          fi
+          if (( matching_invalid_state_count > 0 )); then
+            echo "matching SDK release for OCCT $occt_version is prerelease or not immutable; refusing to treat it as complete" >&2
             exit 1
           fi
 
