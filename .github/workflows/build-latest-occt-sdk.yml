@@ -7,14 +7,8 @@ on:
     branches:
       - master
     paths:
-      - .github/linux-occt-sdk/**
-      - .github/macos-occt-sdk/**
-      - .github/occt-sdk-release/verify-release-assets.sh
-      - .github/windows-occt-sdk/**
+      - .github/occt-sdk-release/**
       - .github/workflows/build-latest-occt-sdk.yml
-      - .github/workflows/build-linux-packages.yml
-      - .github/workflows/build-macos-packages.yml
-      - .github/workflows/build-windows-packages.yml
   workflow_dispatch:
     inputs:
       upstream_tag:
