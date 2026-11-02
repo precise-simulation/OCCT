@@ -1,4 +1,6 @@
-# Historical/manual recovery workflow for immutable occt-sdk-8.0.1-r3.
+# Version-specific recovery example derived from immutable occt-sdk-8.0.1-r3.
+# This is not a byte-for-byte historical snapshot of the r3 workflow: it uses
+# the reusable producer workflows from whichever automation revision executes it.
 # Normal releases are detected, qualified, and published by
 # .github/workflows/build-latest-occt-sdk.yml. If this template is deliberately
 # reused for a replacement/recovery release, update every release-specific value,

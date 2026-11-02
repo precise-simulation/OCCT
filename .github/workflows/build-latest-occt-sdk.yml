@@ -3,6 +3,11 @@ name: Build and publish latest upstream OCCT SDK
 on:
   schedule:
     - cron: '17 6 * * *'
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/build-latest-occt-sdk.yml
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -19,8 +24,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: occt-upstream-sdk-candidate
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('occt-upstream-sdk-pr-{0}', github.event.pull_request.number) || 'occt-upstream-sdk-release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   detect:
@@ -37,7 +42,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       UPSTREAM_REPOSITORY: Open-Cascade-SAS/OCCT
       REQUESTED_TAG: ${{ inputs.upstream_tag || '' }}
-      FORCE_QUALIFY: ${{ inputs.force_qualify || false }}
+      FORCE_QUALIFY: ${{ github.event_name == 'pull_request' || inputs.force_qualify || false }}
     steps:
       - name: Resolve latest stable upstream release
         id: release
@@ -214,6 +219,15 @@ jobs:
           fetch-depth: 1
           sparse-checkout: .github
 
+      - name: Checkout exact upstream source for preservation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: Open-Cascade-SAS/OCCT
+          ref: ${{ needs.detect.outputs.source_sha }}
+          path: source-release
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download Linux SDKs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -278,7 +292,7 @@ jobs:
               source_sha: $source_sha,
               workflow_sha: $workflow_sha,
               intended_release_tag: $intended_release_tag,
-              verified_release_file_count: 16
+              verified_sdk_file_count: 16
             }' > "$candidate_json"
 
           {
@@ -288,7 +302,7 @@ jobs:
             echo "- Source commit: \`$SOURCE_SHA\`"
             echo "- Automation revision: \`$WORKFLOW_SHA\`"
             echo "- Intended release tag: \`$INTENDED_RELEASE_TAG\`"
-            echo "- Verified release files: 16"
+            echo "- Verified SDK candidate files: 16"
             echo
             if [[ "$PUBLISH_REQUESTED" == "true" ]]; then
               echo "This is a new upstream release. On master, the publish job will re-verify these run artifacts before creating the tag and GitHub Release."
@@ -296,6 +310,35 @@ jobs:
               echo "Qualification-only run: a matching SDK release already exists, so no new tag or GitHub Release will be created."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create exact upstream source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git -C source-release rev-parse HEAD)" = "$SOURCE_SHA"
+          source_dir="$RUNNER_TEMP/source-assets"
+          mkdir -p "$source_dir"
+          source_name="opencascade-${OCCT_VERSION}-source-${SOURCE_SHA:0:12}.tar.gz"
+          git -C source-release archive \
+            --format=tar.gz \
+            --prefix="opencascade-${OCCT_VERSION}/" \
+            "$SOURCE_SHA" > "$source_dir/$source_name"
+          (
+            cd "$source_dir"
+            sha256sum "$source_name" > "$source_name.sha256"
+            sha256sum -c "$source_name.sha256"
+          )
+          test -s "$source_dir/$source_name"
+          test -s "$source_dir/$source_name.sha256"
+
+      - name: Upload exact upstream source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-source-snapshot
+          path: ${{ runner.temp }}/source-assets/*
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Upload candidate metadata
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -350,6 +393,12 @@ jobs:
           path: ${{ runner.temp }}/release-assets/windows
           merge-multiple: true
 
+      - name: Download exact upstream source snapshot
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: occt-source-snapshot
+          path: ${{ runner.temp }}/source-assets
+
       - name: Re-verify qualified assets and upstream source
         shell: bash
         run: |
@@ -379,6 +428,11 @@ jobs:
             echo "upstream tag moved after qualification: expected $SOURCE_SHA, now $current_source_sha" >&2
             exit 1
           fi
+
+          source_name="opencascade-${OCCT_VERSION}-source-${SOURCE_SHA:0:12}.tar.gz"
+          test -f "$RUNNER_TEMP/source-assets/$source_name"
+          test -f "$RUNNER_TEMP/source-assets/$source_name.sha256"
+          (cd "$RUNNER_TEMP/source-assets" && sha256sum -c "$source_name.sha256")
 
       - name: Create tag, verify draft assets, and publish immutable release
         shell: bash
@@ -493,14 +547,23 @@ jobs:
           bash .github/linux-occt-sdk/verify-tag.sh "$INTENDED_RELEASE_TAG" "$WORKFLOW_SHA" >/dev/null
           bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
 
-          mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
-          test "${#assets[@]}" -eq 16
+          mapfile -t sdk_assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
+          test "${#sdk_assets[@]}" -eq 16
+          mapfile -t source_assets < <(find "$RUNNER_TEMP/source-assets" -maxdepth 1 -type f -print | sort)
+          test "${#source_assets[@]}" -eq 2
+          assets=("${sdk_assets[@]}" "${source_assets[@]}")
+          test "${#assets[@]}" -eq 18
+          source_name="opencascade-${OCCT_VERSION}-source-${SOURCE_SHA:0:12}.tar.gz"
+          test -f "$RUNNER_TEMP/source-assets/$source_name"
+          test -f "$RUNNER_TEMP/source-assets/$source_name.sha256"
+          (cd "$RUNNER_TEMP/source-assets" && sha256sum -c "$source_name.sha256")
 
           notes="OCCT $OCCT_VERSION SDK bundle built from official upstream release $UPSTREAM_TAG at source commit $SOURCE_SHA."
           notes="$notes"$'\n\n'"Windows shared: qualified lean x64 VC143 source-built SDK restricted to the geometry/data-exchange toolkit closure with optional third-party dependencies disabled."
           notes="$notes"$'\n'"Windows static: qualified lean x64 VC143 static SDK from the same official OCCT source commit, with optional third-party dependencies disabled."
           notes="$notes"$'\n'"Linux: qualified lean x86_64 shared/static SDKs with glibc 2.17 baseline."
           notes="$notes"$'\n'"macOS: qualified lean x86_64 and arm64 shared/static SDKs targeting macOS 13.0."
+          notes="$notes"$'\n\n'"Exact upstream source snapshot: $source_name (with adjacent SHA-256 checksum). GitHub's generated source archives for this release describe the automation tag, not the packaged OCCT source."
           notes="$notes"$'\n\n'"Automation revision: $WORKFLOW_SHA"
           notes="$notes"$'\n\n'"<!-- $run_marker -->"
 
@@ -519,7 +582,7 @@ jobs:
           test "$(jq -r '.draft' <<<"$release_json")" = "true"
           test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$INTENDED_RELEASE_TAG"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 18
           for file in "${assets[@]}"; do
             name="$(basename "$file")"
             expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
@@ -545,7 +608,7 @@ jobs:
           test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
           test "$(jq -r '.immutable' <<<"$release_json")" = "true"
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$INTENDED_RELEASE_TAG"
-          test "$(jq '.assets | length' <<<"$release_json")" -eq 16
+          test "$(jq '.assets | length' <<<"$release_json")" -eq 18
           for file in "${assets[@]}"; do
             name="$(basename "$file")"
             expected="sha256:$(sha256sum "$file" | awk '{print $1}')"
@@ -562,6 +625,8 @@ jobs:
             echo "- Source commit: \`$SOURCE_SHA\`"
             echo "- Release tag: \`$INTENDED_RELEASE_TAG\`"
             echo "- Automation revision: \`$WORKFLOW_SHA\`"
-            echo "- Verified release files: 16"
+            echo "- Verified SDK candidate files: 16"
+            echo "- Preserved source files: 2"
+            echo "- Verified published release files: 18"
             echo "- GitHub release immutable: true"
           } >> "$GITHUB_STEP_SUMMARY"

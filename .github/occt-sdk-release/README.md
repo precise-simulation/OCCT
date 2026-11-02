@@ -25,10 +25,10 @@ platform families from the exact upstream source commit, qualifies the complete
 passes. Routine releases do not require installing or editing a version-specific
 `.github/workflows/release-occt-sdk.yml`.
 
-`.github/occt-sdk-release/release-template.yml` is the retained last known-good
-workflow from immutable `occt-sdk-8.0.1-r3`. It intentionally remains
-version-specific and is kept only as a historical/manual recovery reference. The
-automatic release path does not execute or copy it.
+`.github/occt-sdk-release/release-template.yml` is a version-specific recovery
+example derived from immutable `occt-sdk-8.0.1-r3`. It is not an exact historical
+snapshot: its reusable producer calls resolve from the automation revision that
+executes it. The automatic release path does not execute or copy it.
 
 - Linux uses `.github/workflows/build-linux-packages.yml` and produces lean native
   x86_64 shared and static SDKs with the pinned manylinux2014/glibc 2.17 producer.
@@ -43,9 +43,11 @@ automatic release path does not execute or copy it.
   pinned source commit with optional third-party dependencies disabled. It is
   relocated, consumed by an external CMake project, repackaged, re-extracted, and
   consumed again before upload.
-- The publish job downloads all producer artifacts, verifies the exact inventory
-  and adjacent checksums, creates a draft release, verifies GitHub's uploaded
-  asset digests, and only then publishes it. The final release must be immutable.
+- The publish job downloads all producer artifacts, verifies the exact 16-file
+  SDK inventory and adjacent checksums, creates an exact-SHA upstream source
+  archive plus checksum, creates a draft release, verifies GitHub's uploaded
+  asset digests for all 18 files, and only then publishes it. The final release
+  must be immutable.
 
 The release tag identifies the **workflow revision**, while every source-built
 SDK independently pins the official OCCT release commit.
@@ -81,9 +83,9 @@ The immutable `occt-sdk-8.0.1-r3` release was published on 2026-11-01 from
 workflow commit `39db8383d636fa90504dad663f51e9001508eeb9`. It keeps the
 16-file inventory while replacing the full Windows shared ZIP with the
 source-built lean shared SDK and narrowing all source-built platform SDKs to the
-same 28-toolkit profile. The retained r3 release template is historical evidence
-and a manual recovery reference; future normal releases use the live automatic
-workflow instead.
+same 28-toolkit profile. The retained r3-derived template is a manual recovery
+example, not an exact historical snapshot; future normal releases use the live
+automatic workflow instead.
 
 ## When upstream publishes the next OCCT release
 
@@ -96,11 +98,12 @@ repository directly, so a new source release no longer has to be imported into
 this fork before it can be qualified.
 
 If every platform build and relocated consumer test passes, the workflow verifies
-the full 16-file release inventory, re-resolves the upstream tag to make sure it
+the full 16-file SDK candidate inventory, re-resolves the upstream tag to make sure it
 did not move during the build, and uploads candidate metadata alongside the
 platform workflow artifacts. For a genuinely new upstream version on the default
 branch, a final publish job then re-downloads those same run artifacts, repeats
-the inventory/source checks, creates lightweight `occt-sdk-X.Y.Z` at the exact
+the inventory/source checks, archives the exact upstream source commit with an
+adjacent SHA-256 checksum, creates lightweight `occt-sdk-X.Y.Z` at the exact
 automation revision, creates a draft GitHub Release, verifies every uploaded
 GitHub asset digest, publishes the release, and requires GitHub to report it as
 immutable. The exact lean toolkit closure, system-library requirements, and
@@ -266,9 +269,12 @@ per-release workflow file to install and no version/source pin to edit for a
 routine new upstream release.
 
 The retained `.github/occt-sdk-release/release-template.yml` is intentionally
-bound to the immutable 8.0.1 r3 release. Use it only when deliberately preparing
-a manual replacement/recovery workflow; in that exceptional case every tag,
-version, source SHA, and package expectation must be reviewed before use.
+bound to the 8.0.1 r3 release shape, but it is only a recovery example derived
+from that release. It invokes reusable producers from the revision that executes
+it and therefore is not a self-contained reproduction of r3. Use it only when
+deliberately preparing a manual replacement/recovery workflow; in that
+exceptional case every tag, version, source SHA, producer revision, and package
+expectation must be reviewed before use.
 
 In `.github/occt-sdk-release/verify-release-assets.sh`, update the exact Windows
 lean-shared and static asset names, manifest expectations, and total inventory
@@ -324,6 +330,11 @@ run for a new stable upstream version is publication-capable; use
 `force_qualify` when the intent is to re-check an already-published version
 without creating another release.
 
+Pull requests that modify `.github/workflows/build-latest-occt-sdk.yml` also run
+the orchestrator as a forced qualification against the current stable upstream
+release. Pull-request refs can never enter the publish job, so this exercises the
+full reusable build/qualification path without creating a tag or GitHub Release.
+
 Ordinary pushes to the configured producer branches start a producer only when that
 producer's workflow or helper paths change. Documentation-only commits and
 unrelated branch changes therefore do not launch SDK builds. Never use a skip
@@ -348,11 +359,13 @@ For a new stable upstream release, the workflow:
 4. verifies the combined inventory;
 5. re-checks the upstream tag after qualification and re-verifies the same run
    artifacts;
-6. creates the lightweight SDK tag at the automation revision;
-7. creates a draft GitHub Release from the qualified artifacts;
-8. verifies all uploaded GitHub asset digests while still a draft;
-9. publishes the release;
-10. verifies the tag again and requires GitHub to report the published release
+6. archives the exact upstream source commit and writes its SHA-256 checksum;
+7. creates the lightweight SDK tag at the automation revision;
+8. creates a draft GitHub Release from the 16 qualified SDK files plus the two
+   preserved source files;
+9. verifies all uploaded GitHub asset digests while still a draft;
+10. publishes the release;
+11. verifies the tag again and requires GitHub to report the published release
     as immutable.
 
 The workflow-level concurrency group serializes detection/build/publish runs, so
@@ -360,13 +373,24 @@ two automatic release attempts cannot race each other.
 
 ## Expected release inventory
 
-The current automatic verifier and retained r3 template expect exactly 16 files,
-the same count as immutable r2. The Windows shared pair changes identity from the
-upstream full package to the source-built lean package.
+The qualified SDK candidate remains exactly 16 files, the same count as immutable
+r2/r3. New automatic releases add an exact upstream source archive and its
+adjacent SHA-256 file, so the final published release contains exactly 18 assets.
+The r3-derived recovery example retains the historical 16-file release shape.
 
 - Windows: 1 lean shared ZIP + checksum and 1 lean static ZIP + checksum = 4 files.
 - Linux: shared and static `.tar.gz` archives + 2 `.sha256` files = 4 files.
 - macOS: arm64/x86_64 × shared/static archives + 4 `.sha256` files = 8 files.
+- Source preservation: exact upstream Git tree archive + checksum = 2 files.
+
+The preserved source archive follows:
+
+```text
+opencascade-X.Y.Z-source-<source-sha12>.tar.gz
+```
+
+The adjacent `.sha256` file is uploaded and both files are covered by GitHub's
+release-asset digest verification before publication.
 
 Linux package names follow:
 

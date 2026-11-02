@@ -33,7 +33,10 @@ The automation keeps the workflow revision and OCCT source revision separate:
    automation and checks out `Open-Cascade-SAS/OCCT` separately at that SHA;
 4. artifact manifests and release notes record the exact upstream source SHA;
 5. an `occt-sdk-X.Y.Z` release tag identifies the automation revision that
-   qualified and published those artifacts.
+   qualified and published those artifacts;
+6. automatic releases also attach an exact-SHA upstream source archive and its
+   SHA-256 checksum so the packaged source remains available with the immutable
+   binary release.
 
 See `.github/occt-sdk-release/README.md` for the detailed release contract and
 failure/recovery rules.
