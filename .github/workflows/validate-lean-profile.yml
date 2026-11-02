@@ -15,6 +15,7 @@ on:
       - .github/macos-occt-sdk/build-sdk.sh
       - .github/macos-occt-sdk/sdk_tools.py
       - .github/macos-occt-sdk/verify-release-assets.sh
+      - .github/windows-occt-sdk/**
       - .github/workflows/build-windows-packages.yml
       - .github/workflows/validate-lean-profile.yml
   push:
@@ -30,6 +31,7 @@ on:
       - .github/macos-occt-sdk/build-sdk.sh
       - .github/macos-occt-sdk/sdk_tools.py
       - .github/macos-occt-sdk/verify-release-assets.sh
+      - .github/windows-occt-sdk/**
       - .github/workflows/build-windows-packages.yml
       - .github/workflows/validate-lean-profile.yml
 

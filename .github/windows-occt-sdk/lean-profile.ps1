@@ -1,0 +1,64 @@
+$LeanRootToolkits = @(
+  'TKDESTEP',
+  'TKDEIGES',
+  'TKDESTL',
+  'TKOffset',
+  'TKMesh'
+)
+
+$LeanExpectedToolkits = @(
+  'TKDESTEP',
+  'TKDE',
+  'TKBRep',
+  'TKernel',
+  'TKMath',
+  'TKXSBase',
+  'TKTopAlgo',
+  'TKG2d',
+  'TKCAF',
+  'TKCDF',
+  'TKLCAF',
+  'TKG3d',
+  'TKXCAF',
+  'TKShHealing',
+  'TKGeomBase',
+  'TKGeomAlgo',
+  'TKBO',
+  'TKPrim',
+  'TKService',
+  'TKV3d',
+  'TKVCAF',
+  'TKMesh',
+  'TKHLR',
+  'TKDEIGES',
+  'TKBool',
+  'TKDESTL',
+  'TKOffset',
+  'TKFillet'
+)
+
+$LeanDisabledCMakeOptions = @(
+  'BUILD_MODULE_Draw',
+  'BUILD_MODULE_FoundationClasses',
+  'BUILD_MODULE_ModelingData',
+  'BUILD_MODULE_ModelingAlgorithms',
+  'BUILD_MODULE_ApplicationFramework',
+  'BUILD_MODULE_DataExchange',
+  'BUILD_MODULE_Visualization',
+  'USE_FREETYPE',
+  'USE_FREEIMAGE',
+  'USE_FFMPEG',
+  'USE_OPENVR',
+  'USE_RAPIDJSON',
+  'USE_DRACO',
+  'USE_TBB',
+  'USE_EIGEN',
+  'USE_TCL',
+  'USE_TK',
+  'USE_VTK',
+  'USE_OPENGL',
+  'USE_GLES2',
+  'USE_D3D'
+)
+
+$LeanExcludedDependencyPattern = '(?i)(avcodec|avformat|avutil|avdevice|avfilter|swscale|swresample|freeimage|freetype|openvr|tbb|jemalloc|draco|vtk|tcl|tk8|opengl32|libgles|d3d|dxgi|vcomp)'

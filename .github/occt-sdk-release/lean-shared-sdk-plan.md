@@ -75,6 +75,7 @@ The live release and validation contract is maintained in:
 - `.github/occt-sdk-release/lean-profile.json`;
 - `.github/occt-sdk-release/README.md`;
 - `.github/workflows/build-windows-packages.yml`;
+- `.github/windows-occt-sdk/`;
 - `.github/linux-occt-sdk/`;
 - `.github/macos-occt-sdk/`;
 - `.github/occt-sdk-release/verify-release-assets.sh`.
