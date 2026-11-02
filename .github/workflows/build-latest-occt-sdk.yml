@@ -1,0 +1,272 @@
+name: Build latest upstream OCCT SDK candidate
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Optional exact stable upstream tag (for example V8.0.1); empty means latest stable release
+        required: false
+        type: string
+      force_qualify:
+        description: Re-run qualification even when a matching SDK release already exists
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: occt-upstream-sdk-candidate
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect unbuilt stable upstream release
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.release.outputs.should_build }}
+      upstream_tag: ${{ steps.release.outputs.upstream_tag }}
+      occt_version: ${{ steps.release.outputs.occt_version }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM_REPOSITORY: Open-Cascade-SAS/OCCT
+      REQUESTED_TAG: ${{ inputs.upstream_tag || '' }}
+      FORCE_QUALIFY: ${{ inputs.force_qualify || false }}
+    steps:
+      - name: Resolve latest stable upstream release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            release_json="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/tags/$REQUESTED_TAG")"
+          else
+            release_json="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/latest")"
+          fi
+
+          test "$(jq -r '.draft' <<<"$release_json")" = "false"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
+          upstream_tag="$(jq -r '.tag_name' <<<"$release_json")"
+          if [[ ! "$upstream_tag" =~ ^V([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "unsupported stable OCCT tag: $upstream_tag" >&2
+            exit 1
+          fi
+          occt_version="${BASH_REMATCH[1]}"
+
+          object_json="$(gh api "repos/$UPSTREAM_REPOSITORY/git/ref/tags/$upstream_tag")"
+          object_type="$(jq -r '.object.type' <<<"$object_json")"
+          source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          for _ in 1 2 3 4 5; do
+            if [[ "$object_type" == "commit" ]]; then
+              break
+            fi
+            if [[ "$object_type" != "tag" ]]; then
+              echo "upstream tag resolves to unsupported object type: $object_type" >&2
+              exit 1
+            fi
+            object_json="$(gh api "repos/$UPSTREAM_REPOSITORY/git/tags/$source_sha")"
+            object_type="$(jq -r '.object.type' <<<"$object_json")"
+            source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          done
+          if [[ "$object_type" != "commit" ]]; then
+            echo "could not peel upstream tag $upstream_tag to a commit" >&2
+            exit 1
+          fi
+
+          version_json="$(gh api "repos/$UPSTREAM_REPOSITORY/contents/adm/cmake/version.cmake?ref=$source_sha")"
+          version_text="$(jq -r '.content' <<<"$version_json" | tr -d '\n' | base64 --decode)"
+          major="$(sed -nE 's/^set \(OCC_VERSION_MAJOR +([0-9]+) *\)/\1/p' <<<"$version_text")"
+          minor="$(sed -nE 's/^set \(OCC_VERSION_MINOR +([0-9]+) *\)/\1/p' <<<"$version_text")"
+          patch="$(sed -nE 's/^set \(OCC_VERSION_MAINTENANCE +([0-9]+) *\)/\1/p' <<<"$version_text")"
+          source_version="$major.$minor.$patch"
+          test "$source_version" = "$occt_version"
+
+          release_tag="occt-sdk-$occt_version"
+          release_pattern="^occt-sdk-${occt_version//./\\.}-r[0-9]+$"
+          matching_release_count=0
+          matching_source_count=0
+          existing_tag=""
+          while IFS=$'\t' read -r candidate_tag records_source; do
+            if [[ "$candidate_tag" == "$release_tag" || "$candidate_tag" =~ $release_pattern ]]; then
+              ((matching_release_count += 1))
+              if [[ -z "$existing_tag" ]]; then
+                existing_tag="$candidate_tag"
+              fi
+              if [[ "$records_source" == "true" ]]; then
+                ((matching_source_count += 1))
+              fi
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -rs -r --arg source "$source_sha" '
+                .[][] | [.tag_name, ((.body // "") | contains($source))] | @tsv
+              '
+          )
+
+          should_build=true
+          if (( matching_release_count > 0 )); then
+            if (( matching_source_count == 0 )); then
+              echo "existing SDK release(s) for OCCT $occt_version do not record current upstream source $source_sha" >&2
+              echo "refusing to ignore a possible upstream retag or provenance mismatch" >&2
+              exit 1
+            fi
+            if [[ "$FORCE_QUALIFY" == "true" ]]; then
+              echo "forcing qualification for already-released OCCT $occt_version: $existing_tag"
+            else
+              should_build=false
+              echo "SDK release already exists for OCCT $occt_version: $existing_tag"
+            fi
+          else
+            echo "new stable OCCT release: $upstream_tag -> $source_sha"
+          fi
+
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
+          echo "occt_version=$occt_version" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux SDKs
+    if: needs.detect.outputs.should_build == 'true'
+    needs: detect
+    uses: ./.github/workflows/build-linux-packages.yml
+    with:
+      occt_version: ${{ needs.detect.outputs.occt_version }}
+      occt_source_sha: ${{ needs.detect.outputs.source_sha }}
+
+  macos:
+    name: macOS SDKs
+    if: needs.detect.outputs.should_build == 'true'
+    needs: detect
+    uses: ./.github/workflows/build-macos-packages.yml
+    with:
+      occt_version: ${{ needs.detect.outputs.occt_version }}
+      occt_source_sha: ${{ needs.detect.outputs.source_sha }}
+
+  windows:
+    name: Windows SDKs
+    if: needs.detect.outputs.should_build == 'true'
+    needs: detect
+    uses: ./.github/workflows/build-windows-packages.yml
+    with:
+      occt_version: ${{ needs.detect.outputs.occt_version }}
+      occt_source_sha: ${{ needs.detect.outputs.source_sha }}
+
+  qualify:
+    name: Verify complete SDK candidate
+    if: needs.detect.outputs.should_build == 'true'
+    needs:
+      - detect
+      - linux
+      - macos
+      - windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OCCT_VERSION: ${{ needs.detect.outputs.occt_version }}
+      SOURCE_SHA: ${{ needs.detect.outputs.source_sha }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+      INTENDED_RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+      WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact automation revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Download Linux SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-linux-sdk-*
+          path: ${{ runner.temp }}/release-assets/linux
+          merge-multiple: true
+
+      - name: Download macOS SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-macos-sdk-*
+          path: ${{ runner.temp }}/release-assets/macos
+          merge-multiple: true
+
+      - name: Download Windows SDKs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: occt-windows-sdk-*
+          path: ${{ runner.temp }}/release-assets/windows
+          merge-multiple: true
+
+      - name: Verify complete candidate and re-check upstream tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bash .github/occt-sdk-release/verify-release-assets.sh "$RUNNER_TEMP/release-assets"
+          mapfile -t assets < <(find "$RUNNER_TEMP/release-assets" -type f -print | sort)
+          test "${#assets[@]}" -eq 16
+
+          object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/ref/tags/$UPSTREAM_TAG")"
+          object_type="$(jq -r '.object.type' <<<"$object_json")"
+          current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          for _ in 1 2 3 4 5; do
+            if [[ "$object_type" == "commit" ]]; then
+              break
+            fi
+            if [[ "$object_type" != "tag" ]]; then
+              echo "upstream tag now resolves to unsupported object type: $object_type" >&2
+              exit 1
+            fi
+            object_json="$(gh api "repos/Open-Cascade-SAS/OCCT/git/tags/$current_source_sha")"
+            object_type="$(jq -r '.object.type' <<<"$object_json")"
+            current_source_sha="$(jq -r '.object.sha' <<<"$object_json")"
+          done
+          test "$object_type" = "commit"
+          if [[ "$current_source_sha" != "$SOURCE_SHA" ]]; then
+            echo "upstream tag moved during qualification: expected $SOURCE_SHA, now $current_source_sha" >&2
+            exit 1
+          fi
+
+          candidate_json="$RUNNER_TEMP/occt-sdk-candidate.json"
+          jq -n \
+            --arg version "$OCCT_VERSION" \
+            --arg upstream_tag "$UPSTREAM_TAG" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg workflow_sha "$WORKFLOW_SHA" \
+            --arg intended_release_tag "$INTENDED_RELEASE_TAG" \
+            '{
+              occt_version: $version,
+              upstream_tag: $upstream_tag,
+              source_sha: $source_sha,
+              workflow_sha: $workflow_sha,
+              intended_release_tag: $intended_release_tag,
+              verified_release_file_count: 16
+            }' > "$candidate_json"
+
+          {
+            echo "### Qualified OCCT $OCCT_VERSION lean SDK candidate"
+            echo
+            echo "- Upstream tag: \`$UPSTREAM_TAG\`"
+            echo "- Source commit: \`$SOURCE_SHA\`"
+            echo "- Automation revision: \`$WORKFLOW_SHA\`"
+            echo "- Intended release tag: \`$INTENDED_RELEASE_TAG\`"
+            echo "- Verified release files: 16"
+            echo
+            echo "No tag or GitHub Release was created. Review the release-specific toolkit/toolchain contract before running the release workflow for this exact source SHA."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: occt-sdk-candidate-metadata
+          path: ${{ runner.temp }}/occt-sdk-candidate.json
+          if-no-files-found: error
+          retention-days: 3
