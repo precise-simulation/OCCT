@@ -1,18 +1,23 @@
 # OCCT SDK release automation
 
-This repository's default branch contains the automation used to detect official
-Open CASCADE Technology (OCCT) releases, build lean SDK packages, qualify the
-resulting artifacts, and publish immutable GitHub Releases.
+This repository is the historical OCCT fork and archive for the earlier SDK
+release work. Active SDK automation and all future SDK releases have moved to
+`precise-simulation/OCCT-sdk`.
+
+The existing Git history, OCCT branches, SDK tags, and historical releases are
+retained here for provenance. The automatic SDK publisher in this repository is
+disabled; new consumers should use the canonical releases from
+`https://github.com/precise-simulation/OCCT-sdk`.
 
 The default branch intentionally does **not** vendor an OCCT source tree. Build
 jobs resolve an official release from `Open-Cascade-SAS/OCCT`, peel its tag to
 an exact source commit, and check out that upstream commit separately from this
 repository's automation files.
 
-## Active workflows
+## Historical workflows
 
-- `.github/workflows/build-latest-occt-sdk.yml` detects and publishes new
-  stable upstream OCCT SDK releases.
+- `.github/workflows/build-latest-occt-sdk.yml` is retained for provenance but
+  is disabled in this repository.
 - `.github/workflows/build-linux-packages.yml` builds and validates Linux SDKs.
 - `.github/workflows/build-macos-packages.yml` builds and validates macOS SDKs.
 - `.github/workflows/build-windows-packages.yml` builds and validates Windows SDKs.
