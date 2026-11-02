@@ -1,0 +1,48 @@
+name: Validate lean OCCT SDK profile
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - OCCT-801
+    paths:
+      - .github/occt-sdk-release/lean-profile.json
+      - .github/occt-sdk-release/check-lean-profile.py
+      - .github/occt-sdk-release/verify-release-assets.sh
+      - .github/linux-occt-sdk/build-sdk.sh
+      - .github/linux-occt-sdk/sdk_tools.py
+      - .github/linux-occt-sdk/verify-release-assets.sh
+      - .github/macos-occt-sdk/build-sdk.sh
+      - .github/macos-occt-sdk/sdk_tools.py
+      - .github/macos-occt-sdk/verify-release-assets.sh
+      - .github/workflows/build-windows-packages.yml
+      - .github/workflows/validate-lean-profile.yml
+  push:
+    branches:
+      - OCCT-801
+    paths:
+      - .github/occt-sdk-release/lean-profile.json
+      - .github/occt-sdk-release/check-lean-profile.py
+      - .github/occt-sdk-release/verify-release-assets.sh
+      - .github/linux-occt-sdk/build-sdk.sh
+      - .github/linux-occt-sdk/sdk_tools.py
+      - .github/linux-occt-sdk/verify-release-assets.sh
+      - .github/macos-occt-sdk/build-sdk.sh
+      - .github/macos-occt-sdk/sdk_tools.py
+      - .github/macos-occt-sdk/verify-release-assets.sh
+      - .github/workflows/build-windows-packages.yml
+      - .github/workflows/validate-lean-profile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  consistency:
+    name: Check canonical lean profile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Compare duplicated lean profile definitions
+        run: python3 .github/occt-sdk-release/check-lean-profile.py

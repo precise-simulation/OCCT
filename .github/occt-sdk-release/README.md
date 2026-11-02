@@ -186,6 +186,7 @@ The SDK layer currently lives only in these fork-owned paths:
 .github/workflows/build-linux-packages.yml
 .github/workflows/build-macos-packages.yml
 .github/workflows/build-windows-packages.yml
+.github/workflows/validate-lean-profile.yml
 ```
 
 Before copying them, check whether the new upstream release has introduced any
@@ -199,6 +200,7 @@ sdk_paths=(
   .github/workflows/build-linux-packages.yml
   .github/workflows/build-macos-packages.yml
   .github/workflows/build-windows-packages.yml
+  .github/workflows/validate-lean-profile.yml
 )
 
 git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
@@ -232,6 +234,12 @@ variables. Treat a CMake warning that a manually specified OCCT variable was not
 used as a porting failure until the copied option is removed or replaced. The
 8.0.1 port required removing the obsolete `BUILD_MODULE_DETools` and
 `BUILD_Inspector` options, so this audit is part of every release port.
+
+After deciding the new lean roots, closure, and common disabled options, update
+`.github/occt-sdk-release/lean-profile.json` and run
+`python3 .github/occt-sdk-release/check-lean-profile.py`. The platform
+producers intentionally keep self-contained copies; the checker proves those
+copies still match the canonical cross-platform contract.
 
 Then perform the version/source/asset updates in the checklist below. Port the
 final validated SDK state rather than replaying the full history of the previous
@@ -335,6 +343,12 @@ In `.github/workflows/build-windows-packages.yml`:
   `OCCT_STATIC_BUILD;OCCT_NO_PLUGINS` and required Windows system libraries in
   sync with the manifest and release verifier.
 
+In `.github/workflows/validate-lean-profile.yml`:
+
+- change the pull-request and push branch to the new release branch;
+- keep its path filters synchronized with every file that duplicates values from
+  `.github/occt-sdk-release/lean-profile.json`.
+
 The producer artifacts currently use a three-day Actions retention period. They
 are temporary transport artifacts; the GitHub Release is the durable output.
 
@@ -380,6 +394,7 @@ rg -n '8\.0\.1|V8\.0\.1|b8f597c67781|OCCT_801|macos13|13\.0|glibc2\.17' \
   .github/workflows/build-linux-packages.yml \
   .github/workflows/build-macos-packages.yml \
   .github/workflows/build-windows-packages.yml \
+  .github/workflows/validate-lean-profile.yml \
   .github/workflows/release-occt-sdk.yml
 ```
 
