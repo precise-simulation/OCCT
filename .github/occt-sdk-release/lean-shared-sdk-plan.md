@@ -62,8 +62,17 @@ SDK automation to a later OCCT or toolchain release.
 
 ## Current sources of truth
 
+The canonical cross-platform values that are intentionally copied into the
+self-contained producers are recorded in
+`.github/occt-sdk-release/lean-profile.json`. The lightweight
+`check-lean-profile.py` validator compares those roots, the exact toolkit
+closure, and the common disabled CMake options against every platform copy. It
+does not feed configuration into the builds, so each release producer remains
+self-contained.
+
 The live release and validation contract is maintained in:
 
+- `.github/occt-sdk-release/lean-profile.json`;
 - `.github/occt-sdk-release/README.md`;
 - `.github/workflows/build-windows-packages.yml`;
 - `.github/linux-occt-sdk/`;
