@@ -212,6 +212,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+          sparse-checkout: .github
 
       - name: Download Linux SDKs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -326,6 +327,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+          sparse-checkout: .github
 
       - name: Download qualified Linux SDKs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093

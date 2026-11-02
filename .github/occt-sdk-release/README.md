@@ -11,6 +11,11 @@ The combined release publishes one GitHub release containing qualified lean SDKs
 for Windows, Linux, and macOS. Every package is built from the exact upstream
 OCCT source commit and uses the same geometry/data-exchange toolkit closure.
 
+The default branch is intentionally automation-only. It does not carry a live
+OCCT source tree: each producer sparse-checks out this repository's `.github/`
+automation and checks out `Open-Cascade-SAS/OCCT` separately at the exact
+upstream source SHA selected by the release workflow.
+
 ## Release architecture
 
 The live release workflow is `.github/workflows/build-latest-occt-sdk.yml` on the
@@ -54,7 +59,6 @@ The original immutable 8.0.1 release uses:
 | Item | Value |
 | --- | --- |
 | Combined release tag | `occt-sdk-8.0.1` |
-| Release branch | `OCCT-801` |
 | Workflow commit used by the release | `07a7e05ffcd3cec81e0ed37afdf61b2e35047178` |
 | Upstream OCCT tag | `V8.0.1` |
 | Upstream OCCT source commit | `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` |
@@ -137,9 +141,9 @@ For automatic qualification and publication, the normal policy is:
 
 1. Wait for a new upstream GitHub Release/tag.
 2. Prefer the final stable release for a durable SDK release.
-3. Only create a beta/RC SDK branch when there is a concrete need to qualify a
-   prerelease before the stable tag; keep such releases clearly marked as
-   prereleases.
+3. Keep automatic publication limited to final stable upstream releases.
+   Prerelease qualification is a separate deliberate process and must not reuse
+   the stable-release publication path implicitly.
 4. Read the GitHub Release's actual `tag_name`; do not derive the tag from its
    display name. For example, the 8.0.1 release name is `V8_0_1` while its
    actual tag is `V8.0.1`.
@@ -148,11 +152,6 @@ For automatic qualification and publication, the normal policy is:
 6. Let the existing lean-profile checks decide whether the release still matches
    the qualified SDK contract. If it does not, update the profile/toolchain
    assumptions deliberately and rerun qualification.
-
-The branch-based porting procedure below is still useful when a durable fork
-branch is wanted for source history or additional OCCT changes, but creating that
-branch is no longer a prerequisite for building and qualifying an upstream SDK
-candidate.
 
 Useful release-state checks are:
 
@@ -168,182 +167,21 @@ gh api repos/Open-Cascade-SAS/OCCT/contents/adm/cmake/version.cmake?ref=master \
   base64 --decode
 ```
 
-Once a new release exists, follow the porting procedure below. In particular,
-re-audit all copied CMake variables and the lean toolkit closure against the new
-source. Do not assume that the 8.0.1 option names, toolkit dependencies, or
-system-library requirements remain valid.
-
-## Porting the fork to a new upstream OCCT release
-
-Create each new release branch from the exact upstream OCCT release commit, then
-carry forward the fork-owned SDK layer. `OCCT-801` uses this layout: the official
-`V8.0.1` commit `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` is the branch base,
-followed by the fork's SDK commits. Keeping the upstream commit as the branch base
-makes source identity and the fork-specific delta easy to prove.
-
-### 1. Fetch and verify the upstream release
-
-Configure the official repository as `upstream` once. If that remote already
-exists, verify its URL before using it.
-
-```bash
-git remote -v
-git remote add upstream https://github.com/Open-Cascade-SAS/OCCT.git
-```
-
-For each release, fetch the exact release tag and resolve it immediately to a
-commit. Use the tag spelling published by the upstream GitHub Release; do not
-assume that dots and underscores are interchangeable.
-
-```bash
-previous_branch=OCCT-801
-new_branch=OCCT-XYZ
-upstream_tag=VX.Y.Z
-
-git fetch --no-tags origin "refs/heads/$previous_branch"
-previous_sdk_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
-printf 'previous SDK commit: %s\n' "$previous_sdk_sha"
-
-git fetch --no-tags upstream "refs/tags/$upstream_tag"
-source_sha="$(git rev-parse 'FETCH_HEAD^{commit}')"
-printf '%s\n' "$source_sha"
-
-git ls-remote --tags upstream \
-  "refs/tags/$upstream_tag" "refs/tags/$upstream_tag^{}"
-```
-
-The first fetch pins the previous fork SDK state to the current remote branch
-head, so a stale local branch cannot silently supply old helpers. For an
-annotated upstream tag, `source_sha` must equal the peeled `^{}` commit. For
-a lightweight tag, it must equal the tag ref itself. Cross-check the same commit
-against the upstream GitHub Release before continuing.
-
-### 2. Create the release branch at that exact commit
-
-Create the new fork release branch directly from `source_sha`.
-
-```bash
-git switch --create "$new_branch" "$source_sha"
-test "$(git rev-parse HEAD)" = "$source_sha"
-```
-
-The SDK layer currently lives only in these fork-owned paths:
-
-```text
-.github/linux-occt-sdk/
-.github/macos-occt-sdk/
-.github/windows-occt-sdk/
-.github/occt-sdk-release/
-.github/workflows/build-linux-packages.yml
-.github/workflows/build-macos-packages.yml
-.github/workflows/build-windows-packages.yml
-.github/workflows/validate-lean-profile.yml
-```
-
-Before copying them, check whether the new upstream release has introduced any
-file at those paths:
-
-```bash
-sdk_paths=(
-  .github/linux-occt-sdk
-  .github/macos-occt-sdk
-  .github/windows-occt-sdk
-  .github/occt-sdk-release
-  .github/workflows/build-linux-packages.yml
-  .github/workflows/build-macos-packages.yml
-  .github/workflows/build-windows-packages.yml
-  .github/workflows/validate-lean-profile.yml
-)
-
-git ls-tree -r --name-only "$source_sha" -- "${sdk_paths[@]}"
-```
-
-The expected output is empty with the current repository layout. If upstream now
-owns any of those paths, remove each colliding path from `sdk_paths` before the
-restore below. Carry the non-colliding paths forward with the restore, then merge
-each colliding path separately so the new upstream content remains part of the
-result.
-
-Copy the pinned SDK state from the previous release branch:
-
-```bash
-git restore --source="$previous_sdk_sha" -- "${sdk_paths[@]}"
-```
-
-Before changing version fields, audit the copied OCCT-specific CMake options
-against the new upstream release. List the options passed by both producers:
-
-```bash
-rg -n -- '-D(BUILD|USE|INSTALL|3RDPARTY)_[A-Za-z0-9_]*=' \
-  .github/linux-occt-sdk/build-sdk.sh \
-  .github/macos-occt-sdk/build-sdk.sh \
-  .github/workflows/build-windows-packages.yml
-```
-
-Verify each option against the new upstream `CMakeLists.txt` and `adm/cmake`
-implementation, and review the first producer configure output for unused
-variables. Treat a CMake warning that a manually specified OCCT variable was not
-used as a porting failure until the copied option is removed or replaced. The
-8.0.1 port required removing the obsolete `BUILD_MODULE_DETools` and
-`BUILD_Inspector` options, so this audit is part of every release port.
-
-After deciding the new lean roots, closure, and common disabled options, update
-`.github/occt-sdk-release/lean-profile.json` and run
-`python3 .github/occt-sdk-release/check-lean-profile.py`. The platform
-producers intentionally keep self-contained copies; the checker proves those
-copies still match the canonical cross-platform contract.
-
-Then perform the version/source/asset updates in the checklist below. Port the
-final validated SDK state rather than replaying the full history of the previous
-release branch.
-
-### 3. Verify the port before pushing
-
-After the version-specific edits are complete, stage the intended SDK paths so
-new files absent from the upstream index are included in the review. Stage any
-deliberate compatibility files outside these paths explicitly as well.
-
-```bash
-git status --short
-git add -- "${sdk_paths[@]}"
-git diff --cached --check
-git diff --cached --name-status "$source_sha"
-git diff --cached "$source_sha"
-```
-
-After committing the port, verify the ancestry and committed delta:
-
-```bash
-test "$(git merge-base "$source_sha" HEAD)" = "$source_sha"
-git log --merges --oneline "$source_sha"..HEAD
-git diff --name-status "$source_sha"..HEAD
-```
-
-The merge log should be empty for the normal release-port path. The diff should
-contain the SDK paths above plus only deliberate, reviewed compatibility changes
-needed by the new OCCT release. Keep any required OCCT source patch as a separate,
-clearly named fork commit so it remains visible in this review.
-
-Push the new release branch only after these checks and the version update
-checklist are complete:
-
-```bash
-git push -u origin "$new_branch"
-```
-
-This branch becomes the input for the producer validation and combined release
-steps below.
+Once a new release exists, the automation builds that upstream commit directly.
+If qualification fails, re-audit the configured CMake variables, toolkit closure,
+and system-library assumptions against the new upstream source. Do not assume
+that the 8.0.1 compatibility contract remains valid.
 
 ## Preparing a future version
 
-Use the upstream stable release as the source of truth. Before editing the
-workflows, determine all of the following:
+Use the upstream stable release as the source of truth. Routine stable releases
+do not require a source import or a per-release branch. If qualification exposes
+a compatibility change, verify all of the following before editing the profile
+or platform baselines:
 
 1. OCCT version, for example `8.0.1`.
 2. Upstream GitHub Release tag, for example `V8.0.1`.
 3. The commit to which that upstream tag resolves after peeling annotated tags.
-4. If a per-release fork branch is still wanted, its name, for example
-   `OCCT-801`. The automatic candidate build does not require one.
 
 Useful checks are:
 
@@ -364,14 +202,13 @@ The automatic candidate workflow supplies the detected version and exact source
 SHA as workflow inputs, so routine upstream releases no longer require changing
 version strings throughout the producer helpers. The `8.0.1` values retained as
 defaults in the reusable workflows are the baseline used when those workflows
-run directly from the current release branch.
+run directly from the automation branch.
 
 ### Producer workflows
 
 In `.github/workflows/build-linux-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the manylinux producer image tag/digest and glibc baseline. Keep the
@@ -379,8 +216,7 @@ In `.github/workflows/build-linux-packages.yml`:
 
 In `.github/workflows/build-macos-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the macOS runner labels, Xcode pin, CMake pin, and deployment target.
@@ -388,8 +224,7 @@ In `.github/workflows/build-macos-packages.yml`:
 
 In `.github/workflows/build-windows-packages.yml`:
 
-- keep `master` as the automation branch; retain a per-release branch trigger
-  only while that branch is still being maintained;
+- keep `master` as the automation branch;
 - if advancing the direct-run baseline, change the `workflow_dispatch` defaults
   and the corresponding fallback values used by branch-triggered runs;
 - review the Windows runner/toolchain and the lean shared/static toolkit closure;

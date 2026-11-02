@@ -84,6 +84,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+          sparse-checkout: .github
 
       # actions/download-artifact v4.3.0
       - name: Download Linux SDKs
