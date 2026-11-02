@@ -1,6 +1,8 @@
-# Template only. Copy this file to .github/workflows/release-occt-sdk.yml,
-# update all release-specific values, and commit that active workflow before
-# preflight/tagging. Archive/remove the active copy after the release is immutable.
+# Last known-good release workflow for immutable occt-sdk-8.0.1-r3.
+# Before reuse, copy this file to .github/workflows/release-occt-sdk.yml and
+# update every release-specific value, including the tag, version, source SHA,
+# and asset expectations. Commit that active workflow before preflight/tagging,
+# then archive/remove it again after the new release is immutable.
 name: Release OCCT SDK bundle
 
 on:
