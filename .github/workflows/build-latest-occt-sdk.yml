@@ -290,7 +290,7 @@ jobs:
             echo "- Verified release files: 16"
             echo
             if [[ "$PUBLISH_REQUESTED" == "true" ]]; then
-              echo "This is a new upstream release. The publish job will re-verify these run artifacts before creating the tag and GitHub Release."
+              echo "This is a new upstream release. On master, the publish job will re-verify these run artifacts before creating the tag and GitHub Release."
             else
               echo "Qualification-only run: a matching SDK release already exists, so no new tag or GitHub Release will be created."
             fi
