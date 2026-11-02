@@ -56,7 +56,7 @@ the OCCT source being packaged.
 
 ## Current 8.0.1 references
 
-The original immutable 8.0.1 release uses:
+The original 8.0.1 SDK publication used:
 
 | Item | Value |
 | --- | --- |
@@ -72,8 +72,11 @@ The original immutable 8.0.1 release uses:
 | macOS toolchain | Xcode 16.4, checksum-pinned CMake 4.4.3 |
 | Published files | 14 |
 
-The combined release was published on 2026-10-06. GitHub reports it as immutable,
-and the release tag resolves directly to the workflow commit above.
+The original combined release was published on 2026-10-06. Its lightweight Git
+tag remains and resolves directly to the workflow commit above, but the
+corresponding GitHub Release is no longer present. The current published 8.0.1
+SDK releases are the immutable `occt-sdk-8.0.1-r2` and `occt-sdk-8.0.1-r3`
+replacements described below.
 
 The immutable `occt-sdk-8.0.1-r2` release keeps the same Linux, macOS, and
 official Windows shared inputs and adds the qualified lean Windows static SDK.
