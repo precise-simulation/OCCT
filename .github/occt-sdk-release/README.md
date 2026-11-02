@@ -330,10 +330,11 @@ run for a new stable upstream version is publication-capable; use
 `force_qualify` when the intent is to re-check an already-published version
 without creating another release.
 
-Pull requests that modify `.github/workflows/build-latest-occt-sdk.yml` also run
-the orchestrator as a forced qualification against the current stable upstream
-release. Pull-request refs can never enter the publish job, so this exercises the
-full reusable build/qualification path without creating a tag or GitHub Release.
+Pull requests that modify the orchestrator, any producer workflow or helper tree,
+or the combined release verifier also run the orchestrator as a forced
+qualification against the current stable upstream release. Pull-request refs can
+never enter the publish job, so this exercises the full reusable
+build/qualification path without creating a tag or GitHub Release.
 
 Ordinary pushes to the configured producer branches start a producer only when that
 producer's workflow or helper paths change. Documentation-only commits and
@@ -652,9 +653,11 @@ asset count other than 16.
 ## Recovering from a failed release run
 
 If an automatic run fails before publication, its publish step deletes only a
-draft that it can still prove belongs to that workflow attempt. The lightweight
-SDK tag is retained for safe retry; a cancellation or runner failure can also
-leave a draft behind. Before retrying:
+draft that it can still prove belongs to that workflow attempt. If GitHub accepts
+publication but then reports that same workflow-owned release as mutable, the
+step deletes the mutable release and fails the run. The lightweight SDK tag is
+retained for safe retry. A cancellation or runner failure can still leave a draft
+or mutable release behind. Before retrying:
 
 1. Diagnose and fix the workflow on the default branch.
 2. Make sure every older automatic run is terminal.

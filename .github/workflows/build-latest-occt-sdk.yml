@@ -7,7 +7,14 @@ on:
     branches:
       - master
     paths:
+      - .github/linux-occt-sdk/**
+      - .github/macos-occt-sdk/**
+      - .github/occt-sdk-release/verify-release-assets.sh
+      - .github/windows-occt-sdk/**
       - .github/workflows/build-latest-occt-sdk.yml
+      - .github/workflows/build-linux-packages.yml
+      - .github/workflows/build-macos-packages.yml
+      - .github/workflows/build-windows-packages.yml
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -440,6 +447,7 @@ jobs:
           set -euo pipefail
           api_version="2026-03-10"
           published=0
+          immutability_verified=0
           draft_id=""
           create_attempted=0
           run_marker="occt-sdk-auto-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
@@ -497,33 +505,57 @@ jobs:
               '
           }
 
-          cleanup_unpublished() {
+          cleanup_failed_publication() {
             status=$?
             trap - EXIT
-            if [[ "$status" -ne 0 && "$published" -eq 0 ]]; then
+            if [[ "$status" -eq 0 ]]; then
+              exit 0
+            fi
+
+            if [[ "$published" -eq 0 ]]; then
               if [[ "$create_attempted" -eq 1 && -z "$draft_id" ]]; then
                 draft_id="$(find_our_draft_id 2>/dev/null || true)"
               fi
-              if [[ -n "$draft_id" ]]; then
-                release_json="$(gh api \
+              if [[ -z "$draft_id" ]]; then
+                exit "$status"
+              fi
+              release_json="$(gh api \
+                -H "X-GitHub-Api-Version: $api_version" \
+                "repos/$GITHUB_REPOSITORY/releases/$draft_id" 2>/dev/null || true)"
+              if [[ -n "$release_json" ]] && jq -e \
+                --arg tag "$INTENDED_RELEASE_TAG" \
+                --arg marker "$run_marker" \
+                '.draft == true and .tag_name == $tag and ((.body // "") | contains($marker))' \
+                <<<"$release_json" >/dev/null; then
+                gh api -X DELETE \
                   -H "X-GitHub-Api-Version: $api_version" \
-                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" 2>/dev/null || true)"
-                if [[ -n "$release_json" ]] && jq -e \
-                  --arg tag "$INTENDED_RELEASE_TAG" \
-                  --arg marker "$run_marker" \
-                  '.draft == true and .tag_name == $tag and ((.body // "") | contains($marker))' \
-                  <<<"$release_json" >/dev/null; then
-                  gh api -X DELETE \
-                    -H "X-GitHub-Api-Version: $api_version" \
-                    "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
+                  "repos/$GITHUB_REPOSITORY/releases/$draft_id" || true
+              else
+                echo "release $draft_id is no longer a verified workflow-owned draft; preserving it and the tag" >&2
+              fi
+            elif [[ "$immutability_verified" -eq 0 && -n "$draft_id" ]]; then
+              release_json="$(gh api \
+                -H "X-GitHub-Api-Version: $api_version" \
+                "repos/$GITHUB_REPOSITORY/releases/$draft_id" 2>/dev/null || true)"
+              if [[ -n "$release_json" ]] && jq -e \
+                --arg tag "$INTENDED_RELEASE_TAG" \
+                --arg marker "$run_marker" \
+                '.draft == false and .prerelease == false and .immutable == false and .tag_name == $tag and ((.body // "") | contains($marker))' \
+                <<<"$release_json" >/dev/null; then
+                if gh api -X DELETE \
+                  -H "X-GitHub-Api-Version: $api_version" \
+                  "repos/$GITHUB_REPOSITORY/releases/$draft_id"; then
+                  echo "removed workflow-owned published release after GitHub reported it mutable; retained tag for safe retry" >&2
                 else
-                  echo "release $draft_id is no longer a verified workflow-owned draft; preserving it and the tag" >&2
+                  echo "failed to remove workflow-owned mutable published release $draft_id; manual remediation is required" >&2
                 fi
+              else
+                echo "release $draft_id is not a verified workflow-owned mutable publication; preserving it and the tag" >&2
               fi
             fi
             exit "$status"
           }
-          trap cleanup_unpublished EXIT
+          trap cleanup_failed_publication EXIT
 
           existing_draft_id="$(find_draft_id)"
           if [[ -n "$existing_draft_id" ]] || gh api \
@@ -606,7 +638,11 @@ jobs:
             "repos/$GITHUB_REPOSITORY/releases/$draft_id")"
           test "$(jq -r '.draft' <<<"$release_json")" = "false"
           test "$(jq -r '.prerelease' <<<"$release_json")" = "false"
-          test "$(jq -r '.immutable' <<<"$release_json")" = "true"
+          if [[ "$(jq -r '.immutable' <<<"$release_json")" != "true" ]]; then
+            echo "published release is not immutable; removing the workflow-owned mutable release" >&2
+            exit 1
+          fi
+          immutability_verified=1
           test "$(jq -r '.tag_name' <<<"$release_json")" = "$INTENDED_RELEASE_TAG"
           test "$(jq '.assets | length' <<<"$release_json")" -eq 18
           for file in "${assets[@]}"; do

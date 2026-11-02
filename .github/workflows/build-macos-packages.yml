@@ -40,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-occt-sdk-${{ github.ref }}
+  group: macos-occt-sdk-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
